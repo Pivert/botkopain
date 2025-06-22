@@ -9,7 +9,7 @@ DOCUMENTATION POUR DEVELOPPEURS SEULEMENT
 MODULES IMPORTANTS:
 1. TechAge, Signs Bot, TechAge_modpack et d'autres mods - https://github.com/joe7575
 3. Animalia - https://github.com/ElCeejo/animalia
-4. Mobs Redo - https://codeberg.org/tenplus1/mobs_redo
+4. Mobs - https://codeberg.org/tenplus1/mobs_redo
 
 
 LIENS UTILES POUR LES MODS:

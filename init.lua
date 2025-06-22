@@ -18,18 +18,24 @@ local chat_history = {
 
 -- Fonction pour ajouter un message à l'historique
 local function add_to_history(history_type, player_name, question, answer)
+    -- Gestion des sessions publiques
     if history_type == "public" then
-        -- Ajouter au chat public
-        table.insert(chat_history.public, {
+        if not current_public_session then return end
+
+        if not chat_history.public_sessions[current_public_session] then
+            chat_history.public_sessions[current_public_session] = {}
+        end
+
+        table.insert(chat_history.public_sessions[current_public_session], {
             player = player_name,
             question = question,
-            answer = answer,
+            answer = answer,  -- Accepte nil quand pas de réponse
             timestamp = os.time()
         })
 
-        -- Limiter à 100 messages
-        if #chat_history.public > 100 then
-            table.remove(chat_history.public, 1)
+        -- Limite par session
+        if #chat_history.public_sessions[current_public_session] > 50 then
+            table.remove(chat_history.public_sessions[current_public_session], 1)
         end
     else
         -- Ajouter au chat privé du joueur
@@ -120,27 +126,40 @@ end
 -- Appel au chargement du mod
 load_prompt_and_resources()
 
--- Construction du message système complet
-local function get_full_system_prompt(user_name, user_message)
-    -- Récupérer l'historique des conversations privées du joueur
-    local history_text = ""
-    local player_history = chat_history.private[user_name]
+local function get_full_system_prompt(player_name, user_message, is_public)
+    -- Historique public
+    local public_history = ""
+    if is_public and #chat_history.public > 0 then
+        public_history = "\n\nHISTORIQUE PUBLIC:\n"
+        local start_idx = math.max(1, #chat_history.public - 5 + 1)
+        for i = start_idx, #chat_history.public do
+            local entry = chat_history.public[i]
+            public_history = public_history .. "<" .. entry.player .. "> " .. entry.question .. "\n"
+            if entry.answer then
+                public_history = public_history .. "<" .. bot_name .. "> " .. entry.answer .. "\n\n"
+            end
+        end
+    end
 
+    -- Historique privé
+    local private_history = ""
+    local player_history = chat_history.private[player_name]
     if player_history and #player_history > 0 then
-        history_text = "\n\nHISTORIQUE DE CONVERSATION:\n"
-        -- Inclure les 5 dernières conversations maximum
+        private_history = "\n\nHISTORIQUE PRIVE:\n"
         local start_idx = math.max(1, #player_history - 5 + 1)
         for i = start_idx, #player_history do
-            history_text = history_text .. "Utilisateur: " .. player_history[i].question .. "\n"
-            history_text = history_text .. "BotKopain: " .. player_history[i].answer .. "\n\n"
+            private_history = private_history .. "Utilisateur: " .. player_history[i].question .. "\n"
+            private_history = private_history .. "BotKopain: " .. player_history[i].answer .. "\n\n"
         end
     end
 
     return system_prompt ..
            "\n\nCONTEXTE ET RESSOURCES:\n" .. resources_content ..
-           history_text ..
+           public_history ..
+           private_history ..
            "\n\nQUESTION UTILISATEUR:\n" .. user_message
 end
+
 
 -- Enregistrement du privilège botkopain
 minetest.register_privilege("botkopain", {
@@ -276,13 +295,28 @@ minetest.register_on_chat_message(function(name, message)
 
     processed_messages[message] = true
 
-    -- Traiter la requête
-    process_perplexity_request(name, message, true)
+    -- Compter les joueurs connectés (excluant le bot)
+    local players = minetest.get_connected_players()
+    local player_count = 0
+    for _, player in ipairs(players) do
+        if player:get_player_name() ~= bot_name then
+            player_count = player_count + 1
+        end
+    end
+
+    -- Traiter uniquement si un seul joueur connecté
+    if player_count == 1 then
+        process_perplexity_request(name, message, true)
+    else
+        -- Enregistrer dans l'historique sans réponse
+        add_to_history("public", name, message, nil)
+    end
 
     minetest.after(0.1, function()
         processed_messages[message] = nil
     end)
 end)
+
 
 -- Gestion des messages privés
 minetest.register_chatcommand("msg", {
@@ -295,18 +329,18 @@ minetest.register_chatcommand("msg", {
             return false, "Usage: /msg <joueur> <message>"
         end
 
-        -- Vérifier si le joueur a le privilège botkopain
+        -- Vérifier le privilège
         if not minetest.check_player_privs(sender, {botkopain=true}) then
             return false, "Vous n'avez pas le privilège 'botkopain'"
         end
 
-        if target == bot_name then
-            -- Traiter la requête
+        -- Gestion du raccourci "bk"
+        if target == bot_name or target == "bk" then
             process_perplexity_request(sender, msg, false)
             return true
         end
 
-        -- Comportement normal pour les autres joueurs
+        -- Comportement normal
         if not minetest.get_player_by_name(target) then
             return false, "Le joueur " .. target .. " n'est pas en ligne"
         end
@@ -324,6 +358,7 @@ minetest.register_chatcommand("msg", {
         end
 
         table.insert(names, bot_name)
+        table.insert(names, "bk")  -- Ajout du raccourci
 
         local matches = {}
         for _, name in ipairs(names) do
@@ -336,22 +371,15 @@ minetest.register_chatcommand("msg", {
     end
 })
 
--- Commande /status
-minetest.register_chatcommand("status", {
-    description = "Affiche les joueurs connectés",
-    func = function(name)
-        local players = minetest.get_connected_players()
-        local player_list = {}
-
-        for _, player in ipairs(players) do
-            table.insert(player_list, player:get_player_name())
+minetest.register_chatcommand("bk", {
+    params = "<message>",
+    description = "Envoyer un message privé à " .. bot_name,
+    privs = {botkopain = true},
+    func = function(name, param)
+        if not param or param == "" then
+            return false, "Message vide. Usage: /bk <message>"
         end
-
-        table.insert(player_list, bot_name)
-
-        minetest.chat_send_player(name, "Joueurs en ligne ("..#player_list.."):")
-        minetest.chat_send_player(name, table.concat(player_list, ", "))
-
+        process_perplexity_request(name, param, false)
         return true
     end
 })
