@@ -17,6 +17,10 @@ LIENS UTILES POUR LES MODS:
 - Mods doc: https://codeberg.org/tenplus1
 - Presque tous les mods ont un repo sur GitHub: https://github.com/
 
+AUTRES LIENS UTILES
+- Météo: https://www.accuweather.com/
+- News: https://www.rtl.be
+
 MODS INFOS CSV
 Pour chaque mod installé sur "Un Monde Merveilleux":
 
