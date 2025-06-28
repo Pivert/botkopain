@@ -178,7 +178,7 @@ local function get_full_system_prompt(player_name, user_message, is_public)
     end
 
     return system_prompt ..
-           "\n\nCONTEXTE ET RESSOURCES:\n" ..
+           "\n\nCONTEXTE HISTORIQUE:\n" ..
            session_history ..
            private_history ..
            "\n\nJOUEUR: " .. player_name ..
