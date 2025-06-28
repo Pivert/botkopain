@@ -383,41 +383,41 @@ minetest.register_chatcommand("bk", {
     end
 })
 
--- Commande /status
-minetest.register_chatcommand("status", {
-    description = "Affiche les joueurs connectés et teste la connexion API",
-    func = function(name)
-        local players = minetest.get_connected_players()
-        local player_list = {}
-        for _, player in ipairs(players) do
-            table.insert(player_list, player:get_player_name())
-        end
-        table.insert(player_list, bot_name)
+---- Commande /status
+--minetest.register_chatcommand("status", {
+--    description = "Affiche les joueurs connectés et teste la connexion API",
+--    func = function(name)
+--        local players = minetest.get_connected_players()
+--        local player_list = {}
+--        for _, player in ipairs(players) do
+--            table.insert(player_list, player:get_player_name())
+--        end
+--        table.insert(player_list, bot_name)
 
-        minetest.chat_send_player(name, "Joueurs en ligne ("..#player_list.."):")
-        minetest.chat_send_player(name, table.concat(player_list, ", "))
-        minetest.chat_send_player(name, "API externe: " .. external_url)
+--        minetest.chat_send_player(name, "Joueurs en ligne ("..#player_list.."):")
+--        minetest.chat_send_player(name, table.concat(player_list, ", "))
+--        minetest.chat_send_player(name, "API externe: " .. external_url)
 
-        -- Test de connexion à l'API externe
-        if http_api then
-            http_api.fetch({
-                url = external_url .. "/status",
-                method = "GET",
-                timeout = 5,
-            }, function(result)
-                if result.succeeded and result.code == 200 then
-                    minetest.chat_send_player(name, "✅ Connexion API: OK")
-                else
-                    minetest.chat_send_player(name, "❌ Connexion API: Échec")
-                end
-            end)
-        else
-            minetest.chat_send_player(name, "❌ API HTTP non disponible")
-        end
+--        -- Test de connexion à l'API externe
+--        if http_api then
+--            http_api.fetch({
+--                url = external_url .. "/status",
+--                method = "GET",
+--                timeout = 5,
+--            }, function(result)
+--                if result.succeeded and result.code == 200 then
+--                    minetest.chat_send_player(name, "✅ Connexion API: OK")
+--                else
+--                    minetest.chat_send_player(name, "❌ Connexion API: Échec")
+--                end
+--            end)
+--        else
+--            minetest.chat_send_player(name, "❌ API HTTP non disponible")
+--        end
 
-        return true
-    end
-})
+--        return true
+--    end
+--})
 
 minetest.log("action", "[BotKopain] Module chargé avec API externe: " .. external_url)
 
