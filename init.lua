@@ -4,7 +4,6 @@ local bot_name = "BotKopain"
 local bot_entity = nil
 local processed_messages = {}
 local system_prompt = ""
-local resources_content = ""
 
 -- Configuration du serveur externe (modifiable via minetest.conf)
 local external_host = minetest.settings:get("botkopain_host") or "localhost"
@@ -101,30 +100,6 @@ if not http_api then
     minetest.log("error", "[BotKopain] API HTTP désactivée. Ajoutez 'secure.http_mods = botkopain' dans minetest.conf")
 end
 
--- Fonction de lecture de fichier
-local function read_file(file_path)
-    local file = io.open(file_path, "r")
-    if not file then
-        minetest.log("error", "[BotKopain] Fichier non trouvé: "..file_path)
-        return nil
-    end
-    local content = file:read("*all")
-    file:close()
-    return content
-end
-
--- Chargement des prompts et ressources
-local function load_prompt_and_resources()
-    local mod_path = minetest.get_modpath("botkopain")
-    system_prompt = read_file(mod_path.."/prompt.txt") or
-        "Tu es BotKopain, assistant spécialisé dans Luanti/Minetest. Réponds de manière technique et précise."
-    resources_content = read_file(mod_path.."/resources.txt") or
-        "Documentation: https://docs.luanti.org/\nCode source: https://github.com/luanti-org/luanti"
-    minetest.log("action", "[BotKopain] Prompt et ressources chargés")
-end
-
-load_prompt_and_resources()
-
 -- Fonction pour obtenir la liste des joueurs connectés
 local function get_connected_players()
     local players = minetest.get_connected_players()
@@ -203,7 +178,7 @@ local function get_full_system_prompt(player_name, user_message, is_public)
     end
 
     return system_prompt ..
-           "\n\nCONTEXTE ET RESSOURCES:\n" .. resources_content ..
+           "\n\nCONTEXTE ET RESSOURCES:\n" ..
            session_history ..
            private_history ..
            "\n\nJOUEUR: " .. player_name ..
