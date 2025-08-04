@@ -263,12 +263,13 @@ local function process_external_api_request(player_name, message, is_public)
         return
     end
 
-    -- Construction de la payload similaire au client.py
+    -- Construction de la payload similaire au client.py (nouveau format)
     local payload = {
-        players = player_info.players,
+        author = player_name,
+        online_players = player_info.players,
         xyz = player_info.position,
         privileges = player_info.privileges,
-        message = get_full_system_prompt(player_name, clean_message, is_public)
+        message = clean_message  -- Message utilisateur uniquement (le gateway construit le prompt)
     }
 
     local api_url = external_url .. "/chat"
