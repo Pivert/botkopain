@@ -283,7 +283,7 @@ local function process_external_api_request(player_name, message, is_public)
         extra_headers = {
             "Content-Type: application/json"
         },
-        timeout = 20,
+        timeout = 60,
     }, function(result)
         local reply = safe_parse_response(result)
 
@@ -379,7 +379,7 @@ minetest.register_chatcommand("bk", {
 --            http_api.fetch({
 --                url = external_url .. "/status",
 --                method = "GET",
---                timeout = 5,
+--                timeout = 15,
 --            }, function(result)
 --                if result.succeeded and result.code == 200 then
 --                    minetest.chat_send_player(name, "✅ Connexion API: OK")
