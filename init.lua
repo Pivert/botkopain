@@ -24,8 +24,7 @@ local chat_history = {
     private = {}
 }
 
--- Suivi des salutations envoyées (pour ne pas répéter)
-local greeting_sent = {}
+-- Pas de suivi nécessaire - le bot répond à chaque salutation
 
 -- Fonction pour obtenir la liste des joueurs connectés (nécessaire pour les fonctions suivantes)
 local function get_connected_players()
@@ -424,9 +423,8 @@ minetest.register_on_chat_message(function(name, message)
     -- Initialiser la session si nécessaire
     init_public_session()
 
-    -- Détection des salutations à la connexion (premier message)
-    if not greeting_sent[name] and is_greeting(message) then
-        greeting_sent[name] = true
+    -- Répondre uniquement aux salutations explicites (pas à la connexion)
+    if is_greeting(message) then
         local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
         minetest.chat_send_all("<"..bot_name.."> "..greeting)
         return  -- Ne pas traiter davantage ce message
@@ -538,7 +536,7 @@ minetest.register_chatcommand("bkstatus", {
 })
 
 -- Commande pour effacer l'historique d'un joueur
-minetest.register_chatcommand("bk_clear", {
+minetest.register_chatcommand("bkclear", {
     params = "[player_name]",
     description = "Effacer l'historique de conversation (son propre historique ou celui d'un autre si admin)",
     privs = {botkopain = true},
@@ -563,7 +561,7 @@ minetest.register_chatcommand("bk_clear", {
 })
 
 -- Commande pour activer/désactiver le mode debug
-minetest.register_chatcommand("bk_debug", {
+minetest.register_chatcommand("bkdebug", {
     params = "[on|off]",
     description = "Activer/désactiver le mode debug pour BotKopain",
     privs = {server = true},
@@ -580,14 +578,14 @@ minetest.register_chatcommand("bk_debug", {
         else
             local status = debug_mode and "ACTIVÉ" or "DÉSACTIVÉ"
             minetest.chat_send_player(name, "ℹ️ Mode debug actuellement: " .. status)
-            minetest.chat_send_player(name, "Usage: /bk_debug on  ou  /bk_debug off")
+            minetest.chat_send_player(name, "Usage: /bkdebug on  ou  /bkdebug off")
             return true
         end
     end,
 })
 
 -- Commande de test pour les développeurs (optionnelle)
-minetest.register_chatcommand("bk_test", {
+minetest.register_chatcommand("bktest", {
     params = "",
     description = "Tester la connexion EdenAI (développement uniquement)",
     privs = {server = true},
@@ -617,34 +615,7 @@ minetest.register_chatcommand("bk_test", {
 })
 
 -- Commande pour tester spécifiquement l'authentification
-minetest.register_chatcommand("bk_auth_test", {
-    params = "",
-    description = "Tester l'authentification EdenAI (debug les tokens)",
-    privs = {server = true},
-    func = function(name)
-        local api_key = minetest.settings:get("botkopain_edenai_api_key") or ""
-        local project_id = minetest.settings:get("botkopain_edenai_project_id") or ""
 
-        minetest.chat_send_player(name, "=== TEST AUTH EDENAI ===")
-        minetest.chat_send_player(name, "Project ID: " .. (project_id ~= "" and project_id or "❌ MANQUANT"))
-        minetest.chat_send_player(name, "API Key length: " .. #api_key .. " characters")
-        minetest.chat_send_player(name, "API Key format: " .. (api_key:match("^eyJ") and "JWT ✓" or "❌ NON JWT"))
-
-        -- Vérifier que c'est bien un JWT
-        if api_key:match("^eyJ") then
-            minetest.chat_send_player(name, "✅ Le token a l'air d'être un JWT valide")
-        else
-            minetest.chat_send_player(name, "❌ Le token ne ressemble pas à un JWT EdenAI")
-        end
-
-        -- Comparer avec la gateway Python
-        minetest.chat_send_player(name, "=== COMPARAISON ===")
-        minetest.chat_send_player(name, "Gateway Python utilise la même URL et headers")
-        minetest.chat_send_player(name, "La différence doit être dans le token ou project ID")
-
-        return true, "Test d'authentification terminé - vérifiez que le token et project ID correspondent"
-    end,
-})
 
 -- Charger les scripts de test
 local test_files = {
@@ -667,13 +638,7 @@ end
 
 minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
 
--- Saluer les joueurs à leur connexion
-minetest.register_on_joinplayer(function(player)
-    local name = player:get_player_name()
-    if name ~= bot_name then
-        greeting_sent[name] = false  -- Réinitialiser pour permettre une nouvelle salutation
-    end
-end)
+-- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
 
 -- Détection si le bot est mentionné dans un message
 local function is_bot_mentioned(message)

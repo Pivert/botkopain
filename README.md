@@ -91,7 +91,6 @@ botkopain/
 ├── init.lua          # Module principal
 ├── edenai.lua        # Intégration EdenAI
 ├── mod.conf          # Configuration du mod
-├── prompt.txt        # Prompt système de BotKopain
 └── README.md         # Ce fichier
 ```
 
@@ -109,7 +108,7 @@ botkopain/
 
 ### BotKopain ne répond pas
 1. Vérifiez `/bkstatus` pour la configuration
-2. Utilisez `/bk_test` pour tester la connexion
+2. Utilisez `/bktest` pour tester la connexion
 3. Vérifiez vos clés EdenAI
 
 ### Erreurs de connexion

@@ -296,30 +296,23 @@ function edenai.get_chat_response(player_name, message, online_players)
     -- Log final payload
     minetest.log("action", "[BotKopain] Final payload: " .. minetest.write_json(payload))
     
-    -- Prepare headers - format exact comme Python
+    -- Prepare extra_headers - format correct selon documentation Luanti
     debug_log("API Key length: " .. #EDENAI_API_KEY .. " characters")
     debug_log("Project ID: " .. EDENAI_PROJECT_ID)
     
-    -- Calculer la taille de la payload JSON
-    local json_data = minetest.write_json(payload)
-    local content_length = tostring(#json_data)
-    
-    -- 🔍 DEBUG MASSIF : Construire les headers un par un
-    minetest.log("action", "[BotKopain DEBUG MASSIF] === CONSTRUCTION HEADERS ===")
+    -- 🔍 DEBUG MASSIF : Construire les extra_headers
+    minetest.log("action", "[BotKopain DEBUG MASSIF] === CONSTRUCTION EXTRA_HEADERS ===")
     minetest.log("action", "[BotKopain DEBUG MASSIF] API Key: " .. EDENAI_API_KEY:sub(1, 20) .. "...")
     
-    -- 🔍 SOLUTION : Utiliser extra_headers formaté selon la documentation Luanti
-    -- Format correct : array de strings "Key: Value" (pas une table)
-    -- https://docs.luanti.org/for-creators/api/http-api/
     local extra_headers = {
         "Authorization: Bearer " .. EDENAI_API_KEY,
         "Content-Type: application/json", 
         "Accept: application/json"
     }
     
-    minetest.log("action", "[BotKopain] Headers per Luanti documentation:")
+    minetest.log("action", "[BotKopain DEBUG MASSIF] Extra headers per Luanti documentation:")
     for _, header in ipairs(extra_headers) do
-        minetest.log("action", "[BotKopain] " .. header)
+        minetest.log("action", "[BotKopain DEBUG MASSIF] " .. header)
     end
     
     -- Build URL following Luanti documentation
@@ -334,7 +327,7 @@ function edenai.get_chat_response(player_name, message, online_players)
     debug_log("Curl URL: https://api.edenai.run/v2/aiproducts/askyoda/v2/" .. EDENAI_PROJECT_ID .. "/ask_llm")
     debug_log("Mod URL: " .. url)
     debug_log("Curl Headers: Authorization: Bearer [TOKEN], Content-Type: application/json")
-    debug_log("Mod Headers: " .. minetest.write_json(headers))
+    debug_log("Mod Extra Headers: " .. minetest.write_json(extra_headers))
     
     -- Comparaison détaillée de la payload
     debug_log("=== PAYLOAD COMPARAISON ===")
@@ -378,7 +371,7 @@ function edenai.get_chat_response(player_name, message, online_players)
     
     minetest.log("action", "[BotKopain] Envoi requête EdenAI pour " .. player_name .. " (message: " .. message .. ")")
     minetest.log("action", "[BotKopain] URL: " .. url)
-    minetest.log("action", "[BotKopain] Headers: " .. minetest.write_json(headers))
+    minetest.log("action", "[BotKopain] Extra Headers: " .. minetest.write_json(extra_headers))
     minetest.log("action", "[BotKopain] Payload: " .. minetest.write_json(payload))
     
     -- Make HTTP request (async) - use callback directly
@@ -406,7 +399,7 @@ function edenai.get_chat_response(player_name, message, online_players)
     local content_length = tostring(#json_data)
     
     debug_log("URL: " .. url)
-    debug_log("Headers: " .. minetest.write_json(headers))
+    debug_log("Extra Headers: " .. minetest.write_json(extra_headers))
     debug_log("Content-Length: " .. content_length)
     debug_log("Payload JSON: " .. json_data)
     
