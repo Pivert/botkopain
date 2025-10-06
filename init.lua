@@ -86,15 +86,35 @@ local FRENCH_GREETINGS = {
     "hey", "hi", "bonjour!", "salut!", "coucou!", "hello!", "bonsoir!"
 }
 
--- Détection d'une salutation
+-- Détection d'une salutation (générale ou adressée au bot)
 local function is_greeting(message)
     local lower_msg = message:lower()
+    
+    -- Vérifier si c'est une salutation
+    local is_greeting_word = false
     for _, greeting in ipairs(FRENCH_GREETINGS) do
         if lower_msg:match(greeting) then
-            return true
+            is_greeting_word = true
+            break
         end
     end
-    return false
+    
+    if not is_greeting_word then
+        return false
+    end
+    
+    -- Si c'est adressé au bot, c'est pour le bot
+    if lower_msg:match("botkopain") or lower_msg:match("bk") or lower_msg:match("kopain") then
+        return true
+    end
+    
+    -- Si c'est adressé à quelqu'un d'autre (nom entre < >), ce n'est pas pour le bot
+    if lower_msg:match("<[^>]+>") then
+        return false
+    end
+    
+    -- Si c'est juste "bonjour" ou "salut", c'est général
+    return true
 end
 
 -- Générer une salutation personnalisée
@@ -162,8 +182,8 @@ local function add_to_history(history_type, player_name, question, answer)
             answer = answer,
             timestamp = os.time()
         })
-
-        minetest.log("action", "[BotKopain] Added to private history for " .. player_name .. ": Q=" .. question:sub(1,30) .. "... A=" .. answer:sub(1,30) .. "...")
+        
+        minetest.log("action", "[BotKopain] Added to PRIVATE history for " .. player_name .. ": Q=" .. question:sub(1,30) .. "... A=" .. answer:sub(1,30) .. "...")
         minetest.log("action", "[BotKopain] Private history count for " .. player_name .. ": " .. #chat_history.private[player_name])
 
         -- Limiter à 50 messages par joueur
@@ -359,14 +379,22 @@ local function process_edenai_request(player_name, message, is_public)
         debug_log("Réponse reçue pour " .. player_name .. ": \"" .. reply:sub(1, 100) .. "...\"")
 
         if is_public then
+            -- Mode PUBLIC : historique partagé de la session
             add_to_history("public", player_name, clean_message, reply)
-            minetest.chat_send_all("<"..bot_name.."> "..reply)
+        -- S'assurer qu'il n'y a aucun retour à la ligne dans la réponse
+        reply = reply:gsub("[\n\r]", " ")
+        reply = reply:gsub("  +", " ")
+        reply = reply:trim()
+        minetest.chat_send_all("<"..bot_name.."> "..reply)
+            minetest.log("action", "[BotKopain] Added to PUBLIC history: " .. player_name)
         else
+            -- Mode PRIVÉ : historique personnel du joueur
             add_to_history("private", player_name, clean_message, reply)
             minetest.chat_send_player(player_name, "<"..bot_name.."> "..reply)
             if publish_count > 0 then
                 publish_private_chat(player_name, publish_count)
             end
+            minetest.log("action", "[BotKopain] Added to PRIVATE history for " .. player_name)
         end
     end)
 end
@@ -423,11 +451,29 @@ minetest.register_on_chat_message(function(name, message)
     -- Initialiser la session si nécessaire
     init_public_session()
 
-    -- Répondre uniquement aux salutations explicites (pas à la connexion)
+    -- Répondre uniquement aux salutations explicites (pas à la connexion) avec délai
     if is_greeting(message) then
         local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
-        minetest.chat_send_all("<"..bot_name.."> "..greeting)
+        -- Attendre 3 secondes pour une réponse plus naturelle
+        minetest.after(3, function()
+            minetest.chat_send_all("<"..bot_name.."> "..greeting)
+        end)
         return  -- Ne pas traiter davantage ce message
+    end
+
+    -- Gestion intelligente des transitions entre modes
+    local current_mode = "public"  -- Par défaut, mode public quand plusieurs joueurs
+    if real_player_count == 1 then
+        current_mode = "private"
+    end
+    
+    minetest.log("action", "[BotKopain] Mode " .. current_mode .. " pour " .. name .. " (joueurs: " .. real_player_count .. ")")
+    
+    -- Message explicatif pour les transitions
+    if real_player_count == 1 then
+        minetest.log("action", "[BotKopain] Historique privé de " .. name .. " sera utilisé")
+    else
+        minetest.log("action", "[BotKopain] Historique public de la session sera utilisé")
     end
 
     -- Répondre si le bot est mentionné
@@ -438,11 +484,11 @@ minetest.register_on_chat_message(function(name, message)
 
     -- Traiter les messages normaux selon le nombre de joueurs
     if real_player_count == 1 then
-        -- Quand seul, traiter comme conversation privée (avec historique)
-        minetest.log("action", "[BotKopain] Single player mode - processing as private conversation")
+        -- Mode PRIVÉ : historique personnel du joueur
+        minetest.log("action", "[BotKopain] Single player mode - using private history for " .. name)
         process_edenai_request(name, message, false)
     else
-        -- Quand plusieurs, traiter comme conversation publique
+        -- Mode PUBLIC : historique partagé de la session
         minetest.log("action", "[BotKopain] Multiple players - using public history")
         add_to_history("public", name, message, nil)
     end
@@ -639,6 +685,31 @@ end
 minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
 
 -- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
+
+-- Gestion des changements de nombre de joueurs pour transitionner entre modes
+minetest.register_on_leaveplayer(function(player)
+    local name = player:get_player_name()
+    if name ~= bot_name then
+        -- Quand un joueur part, vérifier s'il faut changer de mode
+        minetest.after(1, function()  -- Attendre 1 seconde pour la mise à jour
+            local players = minetest.get_connected_players()
+            local count = 0
+            for _, p in ipairs(players) do
+                if p:get_player_name() ~= bot_name then
+                    count = count + 1
+                end
+            end
+            
+            if count == 1 then
+                minetest.log("action", "[BotKopain] Transition vers mode privé (1 joueur restant)")
+            elseif count == 0 then
+                minetest.log("action", "[BotKopain] Plus aucun joueur")
+            else
+                minetest.log("action", "[BotKopain] Mode public maintenu (" .. count .. " joueurs)")
+            end
+        end)
+    end
+end)
 
 -- Détection si le bot est mentionné dans un message
 local function is_bot_mentioned(message)

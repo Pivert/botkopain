@@ -209,11 +209,11 @@ function edenai.get_conversation_history(player_name)
     return conversation_histories[player_name]
 end
 
--- Format response to single line, max 4 sentences
+-- Format response to single line, max 4 sentences, sans retours à la ligne
 function edenai.format_single_line(text)
-    -- Replace multiple whitespace with single space
-    text = text:gsub("%s+", " ")
+    -- Retirer TOUS les retours à la ligne et caractères de nouvelle ligne
     text = text:gsub("[\n\r]", " ")
+    text = text:gsub("%s+", " ")
     text = text:trim()
     
     -- Split into sentences
@@ -229,7 +229,15 @@ function edenai.format_single_line(text)
         end
     end
     
-    return table.concat(sentences, " ")
+    -- Forcer une seule ligne en remplaçant les retours à la ligne par des espaces
+    local result = table.concat(sentences, " ")
+    
+    -- S'assurer qu'il n'y a vraiment aucun retour à la ligne
+    result = result:gsub("[\n\r]", " ")
+    result = result:gsub("  +", " ")  -- Éliminer les espaces multiples
+    result = result:trim()
+    
+    return result
 end
 
 -- Main function to get chat response from EdenAI
@@ -421,8 +429,13 @@ function edenai.get_chat_response(player_name, message, online_players)
                                         response_data.response or 
                                         "Réponse non disponible"
                 
-                -- Format response
+                -- Format response and ensure NO line breaks
                 local formatted_response = edenai.format_single_line(assistant_message)
+                
+                -- Double protection : s'assurer qu'il n'y a vraiment aucun retour à la ligne
+                formatted_response = formatted_response:gsub("[\n\r]", " ")
+                formatted_response = formatted_response:gsub("  +", " ")
+                formatted_response = formatted_response:trim()
                 
                 -- Add to history
                 history:add_exchange(message, formatted_response, player_name)
