@@ -1,14 +1,25 @@
 -- mods/botkopain/init.lua
+-- BotKopain - Direct EdenAI integration without Python gateway
 
 local bot_name = "BotKopain"
 local bot_entity = nil
 local processed_messages = {}
-local system_prompt = ""
 
--- Configuration du serveur externe (modifiable via minetest.conf)
-local external_host = minetest.settings:get("botkopain_host") or "localhost"
-local external_port = minetest.settings:get("botkopain_port") or "5000"
-local external_url = "http://" .. external_host .. ":" .. external_port
+-- Load EdenAI module
+botkopain_edenai = dofile(minetest.get_modpath("botkopain") .. "/edenai.lua")  -- Rendre global pour les tests
+
+-- Mode debug
+local debug_mode = false
+
+-- Fonction pour log en mode debug
+local function debug_log(message)
+    if debug_mode then
+        minetest.log("action", "[BotKopain DEBUG] " .. message)
+    end
+end
+
+-- Configuration from minetest.conf
+local system_prompt = ""
 
 -- Structure pour stocker l'historique des conversations
 local chat_history = {
@@ -66,6 +77,9 @@ local function add_to_history(history_type, player_name, question, answer)
             timestamp = os.time()
         })
 
+        minetest.log("action", "[BotKopain] Added to private history for " .. player_name .. ": Q=" .. question:sub(1,30) .. "... A=" .. answer:sub(1,30) .. "...")
+        minetest.log("action", "[BotKopain] Private history count for " .. player_name .. ": " .. #chat_history.private[player_name])
+
         -- Limiter à 50 messages par joueur
         if #chat_history.private[player_name] > 50 then
             table.remove(chat_history.private[player_name], 1)
@@ -76,9 +90,29 @@ end
 -- Fonction pour publier des conversations privées
 local function publish_private_chat(player_name, count)
     count = math.min(count, 5)
-    if not chat_history.private[player_name] or #chat_history.private[player_name] < count then
-        minetest.chat_send_player(player_name, "Pas assez de conversations à publier")
+
+    -- Vérifier si le joueur a un historique
+    minetest.log("action", "[BotKopain] Publishing for " .. player_name .. " - checking history")
+    minetest.log("action", "[BotKopain] History exists: " .. tostring(chat_history.private[player_name] ~= nil))
+    if chat_history.private[player_name] then
+        minetest.log("action", "[BotKopain] History count: " .. #chat_history.private[player_name])
+    end
+
+    if not chat_history.private[player_name] or #chat_history.private[player_name] == 0 then
+        minetest.chat_send_player(player_name, "# "..bot_name.." Aucune conversation à publier")
         return
+    end
+
+    local available_count = #chat_history.private[player_name]
+
+    -- Si demande plus que disponible, ajuster et informer
+    if available_count < count then
+        count = available_count
+        if count == 1 then
+            minetest.chat_send_player(player_name, "# "..bot_name.." Une seule conversation disponible")
+        else
+            minetest.chat_send_player(player_name, "# "..bot_name.." Seulement " .. count .. " conversations disponibles")
+        end
     end
 
     local history = chat_history.private[player_name]
@@ -94,10 +128,19 @@ local function publish_private_chat(player_name, count)
     minetest.chat_send_all("--- Fin du partage ---")
 end
 
--- Vérification de l'API HTTP
+-- Vérification de l'API HTTP - IMPORTANT: do this at mod load time
 local http_api = minetest.request_http_api and minetest.request_http_api()
 if not http_api then
     minetest.log("error", "[BotKopain] API HTTP désactivée. Ajoutez 'secure.http_mods = botkopain' dans minetest.conf")
+    minetest.log("error", "[BotKopain] Assurez-vous que la ligne est dans la section [general] du minetest.conf")
+else
+    minetest.log("action", "[BotKopain] API HTTP disponible")
+    -- Passer l'API HTTP au module edenai
+    botkopain_edenai.set_http_api(http_api)
+
+    -- Scripts de test supprimés - garder uniquement le mod fonctionnel
+
+    minetest.log("action", "[BotKopain] Scripts de test chargés")
 end
 
 -- Fonction pour obtenir la liste des joueurs connectés
@@ -147,42 +190,122 @@ local function get_player_info(player_name)
     }
 end
 
--- Construction du message système complet avec historique
-local function get_full_system_prompt(player_name, user_message, is_public)
-    local session_history = ""
-    local private_history = ""
+-- Load system prompt from file
+local function load_system_prompt()
+    local prompt_file = minetest.get_modpath("botkopain") .. "/prompt.txt"
+    local file = io.open(prompt_file, "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        -- Remove the first line (header) and return the rest
+        content = content:gsub("^#[^\n]*\n", "")
+        return content:trim()
+    else
+        -- Default prompt if file not found
+        return " LANGUE : FRANÇAIS \n\n" ..
+               "Tu es **BotKopain**, un assistant francophone sur le serveur 'Un Monde Merveilleux'.\n\n" ..
+               "Toutes tes réponses DOIVENT être en français, sauf demande contraire explicite.\n" ..
+               "**INTERDICTION :** Ne jamais répondre en anglais ou toute autre langue.\n\n" ..
+               "Tu es STRICTEMENT limité aux informations fournies dans le contexte.\n" ..
+               "Si le contexte ne contient pas l'information, réponds : 'Je n'ai pas cette information.'"
+    end
+end
 
-    -- Historique public
-    if is_public and current_public_session and chat_history.public_sessions[current_public_session] then
-        local session = chat_history.public_sessions[current_public_session]
-        if #session > 0 then
-            session_history = "\n\nHISTORIQUE PUBLIC:\n"
-            for i = 1, #session do
-                local entry = session[i]
-                session_history = session_history .. "<" .. entry.player .. "> " .. entry.question .. "\n"
-                if entry.answer then
-                    session_history = session_history .. "<" .. bot_name .. "> " .. entry.answer .. "\n"
-                end
+-- Vérifier la configuration au démarrage
+minetest.after(1, function() -- Attendre 1 seconde pour s'assurer que tout est chargé
+    minetest.log("action", "[BotKopain] Vérification de la configuration...")
+
+    local http_mods = minetest.settings:get("secure.http_mods") or ""
+    local api_key = minetest.settings:get("botkopain_edenai_api_key") or ""
+    local project_id = minetest.settings:get("botkopain_edenai_project_id") or ""
+
+    minetest.log("action", "[BotKopain] secure.http_mods: '" .. http_mods .. "'")
+    minetest.log("action", "[BotKopain] API key configurée: " .. (api_key ~= "" and "OUI" or "NON"))
+    minetest.log("action", "[BotKopain] Project ID configuré: " .. (project_id ~= "" and "OUI" or "NON"))
+    minetest.log("action", "[BotKopain] HTTP API: " .. (http_api and "DISPONIBLE" or "INDISPONIBLE"))
+
+    if http_mods:find("botkopain") then
+        minetest.log("action", "[BotKopain] botkopain trouvé dans secure.http_mods")
+    else
+        minetest.log("error", "[BotKopain] botkopain NON trouvé dans secure.http_mods")
+    end
+end)
+
+-- Process message with EdenAI
+local function process_edenai_request(player_name, message, is_public)
+    minetest.log("action", "[BotKopain] Traitement demandé pour " .. player_name .. ", http_api: " .. (http_api and "disponible" or "INDISPONIBLE"))
+
+    if not http_api then
+        local error_msg = "API HTTP non disponible - voir /bkstatus"
+        minetest.log("error", "[BotKopain] API HTTP non disponible - ajoutez 'secure.http_mods = botkopain' dans minetest.conf")
+        if is_public then
+            minetest.chat_send_all("<"..bot_name.."> " .. error_msg)
+        else
+            minetest.chat_send_player(player_name, "# "..bot_name.." " .. error_msg)
+        end
+        return
+    end
+
+    -- Check for !public command
+    local publish_count = 0
+    local clean_message = message
+    local public_cmd = message:match("!public(%d*)")
+    if public_cmd then
+        clean_message = message:gsub("!public%d*", ""):gsub("%s+$", "")
+        publish_count = tonumber(public_cmd:match("%d+") or "1") or 1
+    end
+
+    -- Handle special case: only !public command without text
+    if clean_message == "" and publish_count > 0 then
+        -- Just republish the last conversations without contacting EdenAI
+        if not is_public then
+            publish_private_chat(player_name, publish_count)
+        else
+            minetest.chat_send_player(player_name, "# "..bot_name.." La commande !public fonctionne uniquement en chat privé")
+        end
+        return
+    end
+
+    -- Get player info
+    local player_info = get_player_info(player_name)
+    if not player_info then
+        local error_msg = "Impossible d'obtenir les informations du joueur"
+        if is_public then
+            minetest.chat_send_all("<"..bot_name.."> " .. error_msg)
+        else
+            minetest.chat_send_player(player_name, "# "..bot_name.." " .. error_msg)
+        end
+        return
+    end
+
+    -- Load system prompt
+    system_prompt = load_system_prompt()
+
+    -- Get response from EdenAI with proper callback handling
+    debug_log("Demande de réponse EdenAI pour " .. player_name .. ": \"" .. clean_message .. "\"")
+
+    local set_callback = botkopain_edenai.get_chat_response(
+        player_name,
+        clean_message,
+        player_info.players,
+        system_prompt
+    )
+
+    -- Set the callback to handle the response when it arrives
+    set_callback(function(reply)
+        debug_log("Réponse reçue pour " .. player_name .. ": \"" .. reply:sub(1, 100) .. "...\"")
+
+        if is_public then
+            add_to_history("public", player_name, clean_message, reply)
+            minetest.chat_send_all("<"..bot_name.."> "..reply)
+        else
+            add_to_history("private", player_name, clean_message, reply)
+            minetest.chat_send_player(player_name, "# "..bot_name.." "..reply)
+            if publish_count > 0 then
+                publish_private_chat(player_name, publish_count)
             end
         end
-    end
-
-    -- Historique privé
-    if chat_history.private[player_name] and #chat_history.private[player_name] > 0 then
-        private_history = "\n\nHISTORIQUE PRIVE:\n"
-        local player_history = chat_history.private[player_name]
-        for i = math.max(1, #player_history - 5 + 1), #player_history do
-            private_history = private_history .. "Utilisateur: " .. player_history[i].question .. "\n"
-            private_history = private_history .. "BotKopain: " .. player_history[i].answer .. "\n\n"
-        end
-    end
-
-    return system_prompt ..
-           "\n\nCONTEXTE HISTORIQUE:\n" ..
-           session_history ..
-           private_history ..
-           "\n\nJOUEUR: " .. player_name ..
-           "\n\nQUESTION: " .. user_message
+    end)
 end
 
 -- Enregistrement du privilège
@@ -214,102 +337,6 @@ minetest.after(0, function()
     bot_entity = minetest.add_entity(pos, "botkopain:entity")
 end)
 
--- Fonction de parsing sécurisée pour l'API REST
-local function safe_parse_response(result)
-    if not result.succeeded then
-        minetest.log("error", "[BotKopain] Échec requête: "..(result.error or "unknown"))
-        return nil
-    end
-
-    if result.code ~= 200 then
-        minetest.log("error", "[BotKopain] Erreur HTTP "..tostring(result.code))
-        return nil
-    end
-
-    local response = minetest.parse_json(result.data)
-    return response and response.response
-end
-
--- Fonction pour traiter une requête à l'API REST externe
-local function process_external_api_request(player_name, message, is_public)
-    if not http_api then
-        local error_msg = "API HTTP non disponible"
-        if is_public then
-            minetest.chat_send_all("<"..bot_name.."> " .. error_msg)
-        else
-            minetest.chat_send_player(player_name, "# "..bot_name.." " .. error_msg)
-        end
-        return
-    end
-
-    -- Vérifier si le message contient !public
-    local publish_count = 0
-    local clean_message = message
-    local public_cmd = message:match("!public(%d*)")
-    if public_cmd then
-        clean_message = message:gsub("!public%d*", ""):gsub("%s+$", "")
-        publish_count = tonumber(public_cmd:match("%d+") or "1") or 1
-    end
-
-    -- Obtenir les informations du joueur
-    local player_info = get_player_info(player_name)
-    if not player_info then
-        local error_msg = "Impossible d'obtenir les informations du joueur"
-        if is_public then
-            minetest.chat_send_all("<"..bot_name.."> " .. error_msg)
-        else
-            minetest.chat_send_player(player_name, "# "..bot_name.." " .. error_msg)
-        end
-        return
-    end
-
-    -- Construction de la payload similaire au client.py (nouveau format)
-    local payload = {
-        author = player_name,
-        online_players = player_info.players,
-        xyz = player_info.position,
-        privileges = player_info.privileges,
-        message = clean_message  -- Message utilisateur uniquement (le gateway construit le prompt)
-    }
-
-    local api_url = external_url .. "/chat"
-
-    minetest.log("action", "[BotKopain] Envoi requête à " .. api_url .. " pour " .. player_name)
-
-    http_api.fetch({
-        url = api_url,
-        method = "POST",
-        data = minetest.write_json(payload),
-        extra_headers = {
-            "Content-Type: application/json"
-        },
-        timeout = 60,
-    }, function(result)
-        local reply = safe_parse_response(result)
-
-        if reply then
-            if is_public then
-                add_to_history("public", player_name, clean_message, reply)
-                minetest.chat_send_all("<"..bot_name.."> "..reply)
-            else
-                add_to_history("private", player_name, clean_message, reply)
-                minetest.chat_send_player(player_name, "# "..bot_name.." "..reply)
-                if publish_count > 0 then
-                    publish_private_chat(player_name, publish_count)
-                end
-            end
-        else
-            local error_msg = "Erreur de communication avec le serveur externe"
-            if is_public then
-                minetest.chat_send_all("<"..bot_name.."> " .. error_msg)
-            else
-                minetest.chat_send_player(player_name, "# "..bot_name.." " .. error_msg)
-            end
-            minetest.log("error", "[BotKopain] " .. error_msg)
-        end
-    end)
-end
-
 -- Gestion du chat public
 minetest.register_on_chat_message(function(name, message)
     if not http_api then return end
@@ -334,8 +361,11 @@ minetest.register_on_chat_message(function(name, message)
     init_public_session()
 
     if real_player_count == 1 then
-        process_external_api_request(name, message, true)
+        -- When alone, use private mode so history is saved for the player
+        minetest.log("action", "[BotKopain] Single player mode - using private history")
+        process_edenai_request(name, message, false)
     else
+        minetest.log("action", "[BotKopain] Multiple players - using public history")
         add_to_history("public", name, message, nil)
     end
 
@@ -347,53 +377,212 @@ end)
 -- Commande /bk pour les messages privés
 minetest.register_chatcommand("bk", {
     params = "<message>",
-    description = "Envoyer un message privé à " .. bot_name,
+    description = "Envoyer un message privé à " .. bot_name .. " (utilisez !public pour partager des conversations)",
     privs = {botkopain = true},
     func = function(name, param)
         if not param or param == "" then
-            return false, "Message vide. Usage: /bk <message>"
+            return false, "Message vide. Usage: /bk <message> ou /bk !public pour partager la dernière conversation"
         end
 
-        process_external_api_request(name, param, false)
+        -- Vérifier si c'est juste une commande !public sans texte
+        local public_cmd = param:match("^!public(%d*)$")
+        if public_cmd then
+            local publish_count = tonumber(public_cmd:match("%d+") or "1") or 1
+            -- Publier directement sans passer par EdenAI
+            publish_private_chat(name, publish_count)
+            return true, "Conversations partagées avec succès"
+        end
+
+        process_edenai_request(name, param, false)
         return true
-    end
+    end,
 })
 
----- Commande /status
---minetest.register_chatcommand("status", {
---    description = "Affiche les joueurs connectés et teste la connexion API",
---    func = function(name)
---        local players = minetest.get_connected_players()
---        local player_list = {}
---        for _, player in ipairs(players) do
---            table.insert(player_list, player:get_player_name())
---        end
---        table.insert(player_list, bot_name)
+-- Commande /bkstatus pour vérifier la configuration EdenAI
+minetest.register_chatcommand("bkstatus", {
+    description = "Affiche les joueurs connectés et teste la connexion EdenAI",
+    func = function(name)
+        local players = minetest.get_connected_players()
+        local player_list = {}
+        for _, player in ipairs(players) do
+            table.insert(player_list, player:get_player_name())
+        end
+        table.insert(player_list, bot_name)
 
---        minetest.chat_send_player(name, "Joueurs en ligne ("..#player_list.."):")
---        minetest.chat_send_player(name, table.concat(player_list, ", "))
---        minetest.chat_send_player(name, "API externe: " .. external_url)
+        minetest.chat_send_player(name, "Joueurs en ligne ("..#player_list.."):")
+        minetest.chat_send_player(name, table.concat(player_list, ", "))
 
---        -- Test de connexion à l'API externe
---        if http_api then
---            http_api.fetch({
---                url = external_url .. "/status",
---                method = "GET",
---                timeout = 15,
---            }, function(result)
---                if result.succeeded and result.code == 200 then
---                    minetest.chat_send_player(name, "✅ Connexion API: OK")
---                else
---                    minetest.chat_send_player(name, "❌ Connexion API: Échec")
---                end
---            end)
---        else
---            minetest.chat_send_player(name, "❌ API HTTP non disponible")
---        end
+        -- Diagnostic détaillé de la configuration
+        minetest.chat_send_player(name, "=== DIAGNOSTIC BotKopain ===")
 
---        return true
---    end
---})
+        -- Check EdenAI configuration
+        local api_key = minetest.settings:get("botkopain_edenai_api_key") or ""
+        local project_id = minetest.settings:get("botkopain_edenai_project_id") or ""
 
-minetest.log("action", "[BotKopain] Module chargé avec API externe: " .. external_url)
+        if api_key ~= "" and project_id ~= "" then
+            minetest.chat_send_player(name, "✅ Configuration EdenAI: OK")
+            minetest.chat_send_player(name, "📁 Projet: " .. project_id)
+        else
+            minetest.chat_send_player(name, "❌ Configuration EdenAI manquante")
+            if api_key == "" then
+                minetest.chat_send_player(name, "➡️  Ajoutez: botkopain_edenai_api_key = votre_cle_api")
+            end
+            if project_id == "" then
+                minetest.chat_send_player(name, "➡️  Ajoutez: botkopain_edenai_project_id = votre_project_id")
+            end
+            minetest.chat_send_player(name, "💡 Obtenez vos clés sur: https://app.edenai.run")
+        end
 
+        -- Diagnostic HTTP API
+        minetest.chat_send_player(name, "=== API HTTP ===")
+        if http_api then
+            minetest.chat_send_player(name, "✅ API HTTP: Disponible")
+            minetest.chat_send_player(name, "ℹ️  L'API HTTP a été correctement initialisée")
+        else
+            minetest.chat_send_player(name, "❌ API HTTP: Non disponible")
+            minetest.chat_send_player(name, "🔧 Solutions:")
+            minetest.chat_send_player(name, "1. Ajoutez 'secure.http_mods = botkopain' dans minetest.conf")
+            minetest.chat_send_player(name, "2. Redémarrez complètement Luanti")
+            minetest.chat_send_player(name, "3. Vérifiez que c'est dans la section [general]")
+            minetest.chat_send_player(name, "4. Pas dans world.mt ou autre fichier")
+        end
+
+        -- Info sur la configuration actuelle
+        minetest.chat_send_player(name, "=== FICHIERS DE CONFIG ===")
+        minetest.chat_send_player(name, "📁 Vérifiez: " .. minetest.get_worldpath() .. "/minetest.conf")
+        minetest.chat_send_player(name, "📁 Ou: ~/.minetest/minetest.conf (Linux)")
+        minetest.chat_send_player(name, "📁 Ou: APPDATA/minetest/minetest.conf (Windows)")
+
+        return true
+    end,
+})
+
+-- Commande pour effacer l'historique d'un joueur
+minetest.register_chatcommand("bk_clear", {
+    params = "[player_name]",
+    description = "Effacer l'historique de conversation (son propre historique ou celui d'un autre si admin)",
+    privs = {botkopain = true},
+    func = function(name, param)
+        local target_player = param ~= "" and param or name
+
+        -- Check if player can clear other's history
+        if target_player ~= name and not minetest.check_player_privs(name, {server=true}) then
+            return false, "Vous n'avez pas la permission d'effacer l'historique d'un autre joueur"
+        end
+
+        -- Clear history
+        botkopain_edenai.clear_conversation_history(target_player)
+
+        if target_player == name then
+            return true, "Votre historique de conversation a été effacé"
+        else
+            minetest.log("action", "[BotKopain] " .. name .. " a effacé l'historique de " .. target_player)
+            return true, "Historique de " .. target_player .. " effacé"
+        end
+    end,
+})
+
+-- Commande pour activer/désactiver le mode debug
+minetest.register_chatcommand("bk_debug", {
+    params = "[on|off]",
+    description = "Activer/désactiver le mode debug pour BotKopain",
+    privs = {server = true},
+    func = function(name, param)
+        if param == "on" then
+            botkopain_edenai.set_debug_mode(true)
+            minetest.chat_send_player(name, "✅ Mode debug BotKopain ACTIVÉ")
+            minetest.chat_send_player(name, "📋 Les logs détaillés apparaîtront dans les logs serveur")
+            return true
+        elseif param == "off" then
+            botkopain_edenai.set_debug_mode(false)
+            minetest.chat_send_player(name, "✅ Mode debug BotKopain DÉSACTIVÉ")
+            return true
+        else
+            local status = debug_mode and "ACTIVÉ" or "DÉSACTIVÉ"
+            minetest.chat_send_player(name, "ℹ️ Mode debug actuellement: " .. status)
+            minetest.chat_send_player(name, "Usage: /bk_debug on  ou  /bk_debug off")
+            return true
+        end
+    end,
+})
+
+-- Commande de test pour les développeurs (optionnelle)
+minetest.register_chatcommand("bk_test", {
+    params = "",
+    description = "Tester la connexion EdenAI (développement uniquement)",
+    privs = {server = true},
+    func = function(name)
+        -- Vérifier la configuration
+        local api_key = minetest.settings:get("botkopain_edenai_api_key") or ""
+        local project_id = minetest.settings:get("botkopain_edenai_project_id") or ""
+
+        if api_key == "" or project_id == "" then
+            minetest.chat_send_player(name, "❌ Configuration EdenAI incomplète")
+            minetest.chat_send_player(name, "Utilisez /bkstatus pour vérifier")
+            return true
+        end
+
+        minetest.chat_send_player(name, "✅ Configuration EdenAI OK")
+        minetest.chat_send_player(name, "🧪 Test de connexion en cours...")
+
+        -- Test simple avec un message court
+        local test_message = "Bonjour, test de connexion"
+        minetest.chat_send_player(name, "📤 Envoi: \"" .. test_message .. "\"")
+
+        -- Lancer le test
+        process_edenai_request(name, test_message, false)
+
+        return true, "Test lancé - la réponse devrait arriver dans 1-3 secondes (debug: " .. (debug_mode and "ON" or "OFF") .. ")"
+    end,
+})
+
+-- Commande pour tester spécifiquement l'authentification
+minetest.register_chatcommand("bk_auth_test", {
+    params = "",
+    description = "Tester l'authentification EdenAI (debug les tokens)",
+    privs = {server = true},
+    func = function(name)
+        local api_key = minetest.settings:get("botkopain_edenai_api_key") or ""
+        local project_id = minetest.settings:get("botkopain_edenai_project_id") or ""
+
+        minetest.chat_send_player(name, "=== TEST AUTH EDENAI ===")
+        minetest.chat_send_player(name, "Project ID: " .. (project_id ~= "" and project_id or "❌ MANQUANT"))
+        minetest.chat_send_player(name, "API Key length: " .. #api_key .. " characters")
+        minetest.chat_send_player(name, "API Key format: " .. (api_key:match("^eyJ") and "JWT ✓" or "❌ NON JWT"))
+
+        -- Vérifier que c'est bien un JWT
+        if api_key:match("^eyJ") then
+            minetest.chat_send_player(name, "✅ Le token a l'air d'être un JWT valide")
+        else
+            minetest.chat_send_player(name, "❌ Le token ne ressemble pas à un JWT EdenAI")
+        end
+
+        -- Comparer avec la gateway Python
+        minetest.chat_send_player(name, "=== COMPARAISON ===")
+        minetest.chat_send_player(name, "Gateway Python utilise la même URL et headers")
+        minetest.chat_send_player(name, "La différence doit être dans le token ou project ID")
+
+        return true, "Test d'authentification terminé - vérifiez que le token et project ID correspondent"
+    end,
+})
+
+-- Charger les scripts de test
+local test_files = {
+    "test_edenai_lua.lua",
+    "test_exact_curl.lua",
+    "debug_comparison.lua"
+}
+
+for _, test_file in ipairs(test_files) do
+    local test_path = minetest.get_modpath("botkopain") .. "/" .. test_file
+    local file = io.open(test_path, "r")
+    if file then
+        file:close()
+        dofile(test_path)
+        minetest.log("action", "[BotKopain] Script de test chargé: " .. test_file)
+    else
+        minetest.log("warning", "[BotKopain] Script de test non trouvé: " .. test_file)
+    end
+end
+
+minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
