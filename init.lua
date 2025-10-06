@@ -18,9 +18,6 @@ local function debug_log(message)
     end
 end
 
--- Configuration from minetest.conf
-local system_prompt = ""
-
 -- Structure pour stocker l'historique des conversations
 local chat_history = {
     public_sessions = {},
@@ -190,26 +187,7 @@ local function get_player_info(player_name)
     }
 end
 
--- Load system prompt from file
-local function load_system_prompt()
-    local prompt_file = minetest.get_modpath("botkopain") .. "/prompt.txt"
-    local file = io.open(prompt_file, "r")
-    if file then
-        local content = file:read("*all")
-        file:close()
-        -- Remove the first line (header) and return the rest
-        content = content:gsub("^#[^\n]*\n", "")
-        return content:trim()
-    else
-        -- Default prompt if file not found
-        return " LANGUE : FRANÇAIS \n\n" ..
-               "Tu es **BotKopain**, un assistant francophone sur le serveur 'Un Monde Merveilleux'.\n\n" ..
-               "Toutes tes réponses DOIVENT être en français, sauf demande contraire explicite.\n" ..
-               "**INTERDICTION :** Ne jamais répondre en anglais ou toute autre langue.\n\n" ..
-               "Tu es STRICTEMENT limité aux informations fournies dans le contexte.\n" ..
-               "Si le contexte ne contient pas l'information, réponds : 'Je n'ai pas cette information.'"
-    end
-end
+-- No local prompt needed - EdenAI handles prompts remotely
 
 -- Vérifier la configuration au démarrage
 minetest.after(1, function() -- Attendre 1 seconde pour s'assurer que tout est chargé
@@ -278,17 +256,13 @@ local function process_edenai_request(player_name, message, is_public)
         return
     end
 
-    -- Load system prompt
-    system_prompt = load_system_prompt()
-
     -- Get response from EdenAI with proper callback handling
     debug_log("Demande de réponse EdenAI pour " .. player_name .. ": \"" .. clean_message .. "\"")
 
     local set_callback = botkopain_edenai.get_chat_response(
         player_name,
         clean_message,
-        player_info.players,
-        system_prompt
+        player_info.players
     )
 
     -- Set the callback to handle the response when it arrives
