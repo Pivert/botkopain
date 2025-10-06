@@ -27,6 +27,60 @@ local chat_history = {
 -- Suivi des salutations envoyées (pour ne pas répéter)
 local greeting_sent = {}
 
+-- Fonction pour obtenir la liste des joueurs connectés (nécessaire pour les fonctions suivantes)
+local function get_connected_players()
+    local players = minetest.get_connected_players()
+    local player_names = {}
+    
+    for _, player in ipairs(players) do
+        local name = player:get_player_name()
+        if name ~= bot_name then
+            table.insert(player_names, name)
+        end
+    end
+    
+    return {
+        count = #player_names,
+        players = player_names
+    }
+end
+
+-- Détection si le bot est mentionné dans un message
+local function is_bot_mentioned(message)
+    local lower_msg = message:lower()
+    return lower_msg:match("bk:") or 
+           lower_msg:match("botkopain:") or 
+           lower_msg:match("kopain:")
+end
+
+-- Répondre quand le bot est mentionné
+local function respond_to_mention(player_name, message)
+    -- Extraire le message après la mention
+    local clean_message = message:gsub("[Bb][Kk]:%s*", "")
+    clean_message = clean_message:gsub("[Bb]ot[Kk]opain:%s*", "")
+    clean_message = clean_message:gsub("[Kk]opain:%s*", "")
+    clean_message = clean_message:trim()
+    
+    if clean_message == "" then
+        -- Pas de message après la mention
+        minetest.chat_send_all("<"..bot_name.."> Oui ? Je suis là ! 😊")
+        return
+    end
+    
+    -- Traiter comme une question normale
+    local player_info = get_connected_players()
+    
+    local set_callback = botkopain_edenai.get_chat_response(
+        player_name,
+        clean_message,
+        player_info.players
+    )
+    
+    set_callback(function(reply)
+        minetest.chat_send_all("<"..bot_name.."> "..reply)
+    end)
+end
+
 -- Salutations françaises reconnues
 local FRENCH_GREETINGS = {
     "bonjour", "bonsoir", "'soir", "hello", "bijour", "ola", "salut", "coucou", 
@@ -310,7 +364,7 @@ local function process_edenai_request(player_name, message, is_public)
             minetest.chat_send_all("<"..bot_name.."> "..reply)
         else
             add_to_history("private", player_name, clean_message, reply)
-            minetest.chat_send_player(player_name, "# "..bot_name.." "..reply)
+            minetest.chat_send_player(player_name, "<"..bot_name.."> "..reply)
             if publish_count > 0 then
                 publish_private_chat(player_name, publish_count)
             end
@@ -384,11 +438,13 @@ minetest.register_on_chat_message(function(name, message)
         return  -- Ne pas traiter davantage ce message
     end
 
+    -- Traiter les messages normaux selon le nombre de joueurs
     if real_player_count == 1 then
-        -- When alone, use private mode so history is saved for the player
-        minetest.log("action", "[BotKopain] Single player mode - using private history")
+        -- Quand seul, traiter comme conversation privée (avec historique)
+        minetest.log("action", "[BotKopain] Single player mode - processing as private conversation")
         process_edenai_request(name, message, false)
     else
+        -- Quand plusieurs, traiter comme conversation publique
         minetest.log("action", "[BotKopain] Multiple players - using public history")
         add_to_history("public", name, message, nil)
     end
