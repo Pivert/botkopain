@@ -24,7 +24,8 @@ local chat_history = {
     private = {}
 }
 
--- Pas de suivi nécessaire - le bot répond à chaque salutation
+-- Suivi des salutations par joueur avec limite temporelle (2 heures)
+local greeting_tracker = {}
 
 -- Fonction pour obtenir la liste des joueurs connectés (nécessaire pour les fonctions suivantes)
 local function get_connected_players()
@@ -451,14 +452,32 @@ minetest.register_on_chat_message(function(name, message)
     -- Initialiser la session si nécessaire
     init_public_session()
 
-    -- Répondre uniquement aux salutations explicites (pas à la connexion) avec délai
+    -- Répondre uniquement aux salutations explicites (pas à la connexion) avec délai et limite temporelle
     if is_greeting(message) then
-        local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
-        -- Attendre 3 secondes pour une réponse plus naturelle
-        minetest.after(3, function()
-            minetest.chat_send_all("<"..bot_name.."> "..greeting)
-        end)
-        return  -- Ne pas traiter davantage ce message
+        local current_time = os.time()
+        local player_tracker = greeting_tracker[name] or {last_greeting = 0, count = 0}
+        
+        -- Vérifier si assez de temps s'est écoulé (2 heures = 7200 secondes)
+        local time_since_last = current_time - player_tracker.last_greeting
+        
+        if time_since_last >= 7200 then  -- 2 heures en secondes
+            -- Mettre à jour le tracker
+            greeting_tracker[name] = {
+                last_greeting = current_time,
+                count = player_tracker.count + 1
+            }
+            
+            minetest.log("action", "[BotKopain] Salutation pour " .. name .. " (dernière: " .. time_since_last .. "s ago, total: " .. greeting_tracker[name].count .. ")")
+            
+            local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
+            -- Attendre 3 secondes pour une réponse plus naturelle
+            minetest.after(3, function()
+                minetest.chat_send_all("<"..bot_name.."> "..greeting)
+            end)
+            return  -- Ne pas traiter davantage ce message
+        else
+            minetest.log("action", "[BotKopain] Salutation ignorée pour " .. name .. " (trop récente: " .. time_since_last .. "s < 7200s)")
+        end
     end
 
     -- Gestion intelligente des transitions entre modes
@@ -685,6 +704,7 @@ end
 minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
 
 -- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
+-- avec une limite de 2 heures entre chaque salutation par joueur
 
 -- Gestion des changements de nombre de joueurs pour transitionner entre modes
 minetest.register_on_leaveplayer(function(player)
