@@ -31,14 +31,14 @@ local greeting_tracker = {}
 local function get_connected_players()
     local players = minetest.get_connected_players()
     local player_names = {}
-    
+
     for _, player in ipairs(players) do
         local name = player:get_player_name()
         if name ~= bot_name then
             table.insert(player_names, name)
         end
     end
-    
+
     return {
         count = #player_names,
         players = player_names
@@ -48,8 +48,8 @@ end
 -- Détection si le bot est mentionné dans un message
 local function is_bot_mentioned(message)
     local lower_msg = message:lower()
-    return lower_msg:match("bk:") or 
-           lower_msg:match("botkopain:") or 
+    return lower_msg:match("bk:") or
+           lower_msg:match("botkopain:") or
            lower_msg:match("kopain:")
 end
 
@@ -60,22 +60,22 @@ local function respond_to_mention(player_name, message)
     clean_message = clean_message:gsub("[Bb]ot[Kk]opain:%s*", "")
     clean_message = clean_message:gsub("[Kk]opain:%s*", "")
     clean_message = clean_message:trim()
-    
+
     if clean_message == "" then
         -- Pas de message après la mention
         minetest.chat_send_all("<"..bot_name.."> Oui ? Je suis là ! 😊")
         return
     end
-    
+
     -- Traiter comme une question normale
     local player_info = get_connected_players()
-    
+
     local set_callback = botkopain_edenai.get_chat_response(
         player_name,
         clean_message,
         player_info.players
     )
-    
+
     set_callback(function(reply)
         minetest.chat_send_all("<"..bot_name.."> "..reply)
     end)
@@ -83,14 +83,14 @@ end
 
 -- Salutations françaises reconnues
 local FRENCH_GREETINGS = {
-    "bonjour", "bonsoir", "'soir", "hello", "bijour", "ola", "salut", "coucou", 
+    "bonjour", "bonsoir", "'soir", "hello", "bijour", "ola", "salut", "coucou",
     "hey", "hi", "bonjour!", "salut!", "coucou!", "hello!", "bonsoir!"
 }
 
 -- Détection d'une salutation (générale ou adressée au bot)
 local function is_greeting(message)
     local lower_msg = message:lower()
-    
+
     -- Vérifier si c'est une salutation
     local is_greeting_word = false
     for _, greeting in ipairs(FRENCH_GREETINGS) do
@@ -99,21 +99,21 @@ local function is_greeting(message)
             break
         end
     end
-    
+
     if not is_greeting_word then
         return false
     end
-    
+
     -- Si c'est adressé au bot, c'est pour le bot
     if lower_msg:match("botkopain") or lower_msg:match("bk") or lower_msg:match("kopain") then
         return true
     end
-    
+
     -- Si c'est adressé à quelqu'un d'autre (nom entre < >), ce n'est pas pour le bot
     if lower_msg:match("<[^>]+>") then
         return false
     end
-    
+
     -- Si c'est juste "bonjour" ou "salut", c'est général
     return true
 end
@@ -122,15 +122,15 @@ end
 local function generate_greeting(player_name, time_of_day)
     local hour = tonumber(os.date("%H")) or 12
     local greeting
-    
-    if hour < 12 then
+
+    if hour >= 2 and hour < 10 then
         greeting = "Bonjour"
-    elseif hour < 18 then
+    elseif hour >= 10 and hour < 16 then
         greeting = "Bon après-midi"
     else
         greeting = "Bonsoir"
     end
-    
+
     return greeting .. " " .. player_name .. " ! 😊"
 end
 
@@ -183,7 +183,7 @@ local function add_to_history(history_type, player_name, question, answer)
             answer = answer,
             timestamp = os.time()
         })
-        
+
         minetest.log("action", "[BotKopain] Added to PRIVATE history for " .. player_name .. ": Q=" .. question:sub(1,30) .. "... A=" .. answer:sub(1,30) .. "...")
         minetest.log("action", "[BotKopain] Private history count for " .. player_name .. ": " .. #chat_history.private[player_name])
 
@@ -456,19 +456,19 @@ minetest.register_on_chat_message(function(name, message)
     if is_greeting(message) then
         local current_time = os.time()
         local player_tracker = greeting_tracker[name] or {last_greeting = 0, count = 0}
-        
+
         -- Vérifier si assez de temps s'est écoulé (2 heures = 7200 secondes)
         local time_since_last = current_time - player_tracker.last_greeting
-        
+
         if time_since_last >= 7200 then  -- 2 heures en secondes
             -- Mettre à jour le tracker
             greeting_tracker[name] = {
                 last_greeting = current_time,
                 count = player_tracker.count + 1
             }
-            
+
             minetest.log("action", "[BotKopain] Salutation pour " .. name .. " (dernière: " .. time_since_last .. "s ago, total: " .. greeting_tracker[name].count .. ")")
-            
+
             local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
             -- Attendre 3 secondes pour une réponse plus naturelle
             minetest.after(3, function()
@@ -485,9 +485,9 @@ minetest.register_on_chat_message(function(name, message)
     if real_player_count == 1 then
         current_mode = "private"
     end
-    
+
     minetest.log("action", "[BotKopain] Mode " .. current_mode .. " pour " .. name .. " (joueurs: " .. real_player_count .. ")")
-    
+
     -- Message explicatif pour les transitions
     if real_player_count == 1 then
         minetest.log("action", "[BotKopain] Historique privé de " .. name .. " sera utilisé")
@@ -710,6 +710,12 @@ minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI
 minetest.register_on_leaveplayer(function(player)
     local name = player:get_player_name()
     if name ~= bot_name then
+        -- Compact player history on disconnect
+        minetest.log("action", "[BotKopain] Compacting history for player " .. name)
+        if _G.edenai and _G.edenai.compact_player_history then
+            _G.edenai.compact_player_history(name)
+        end
+        
         -- Quand un joueur part, vérifier s'il faut changer de mode
         minetest.after(1, function()  -- Attendre 1 seconde pour la mise à jour
             local players = minetest.get_connected_players()
@@ -719,11 +725,15 @@ minetest.register_on_leaveplayer(function(player)
                     count = count + 1
                 end
             end
-            
+
             if count == 1 then
                 minetest.log("action", "[BotKopain] Transition vers mode privé (1 joueur restant)")
             elseif count == 0 then
-                minetest.log("action", "[BotKopain] Plus aucun joueur")
+                minetest.log("action", "[BotKopain] Plus aucun joueur - compacting public history")
+                -- Compact public history when all players disconnect
+                if _G.edenai and _G.edenai.compact_public_history then
+                    _G.edenai.compact_public_history()
+                end
             else
                 minetest.log("action", "[BotKopain] Mode public maintenu (" .. count .. " joueurs)")
             end
@@ -734,8 +744,8 @@ end)
 -- Détection si le bot est mentionné dans un message
 local function is_bot_mentioned(message)
     local lower_msg = message:lower()
-    return lower_msg:match("bk:") or 
-           lower_msg:match("botkopain:") or 
+    return lower_msg:match("bk:") or
+           lower_msg:match("botkopain:") or
            lower_msg:match("kopain:")
 end
 
@@ -746,22 +756,22 @@ local function respond_to_mention(player_name, message)
     clean_message = clean_message:gsub("[Bb]ot[Kk]opain:%s*", "")
     clean_message = clean_message:gsub("[Kk]opain:%s*", "")
     clean_message = clean_message:trim()
-    
+
     if clean_message == "" then
         -- Pas de message après la mention
         minetest.chat_send_all("<"..bot_name.."> Oui ? Je suis là ! 😊")
         return
     end
-    
+
     -- Traiter comme une question normale
     local player_info = get_connected_players()
-    
+
     local set_callback = botkopain_edenai.get_chat_response(
         player_name,
         clean_message,
         player_info.players
     )
-    
+
     set_callback(function(reply)
         minetest.chat_send_all("<"..bot_name.."> "..reply)
     end)

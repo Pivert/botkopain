@@ -1,6 +1,8 @@
 -- EdenAI API integration for BotKopain
 -- Direct connection to EdenAI without Python gateway
 
+minetest.log("action", "[BotKopain CRITICAL] Loading edenai.lua from /workdir/luanti/mods/botkopain")
+
 local edenai = {}
 
 -- Configuration
@@ -29,6 +31,18 @@ function edenai.set_debug_mode(enabled)
     minetest.log("action", "[BotKopain] Mode debug " .. (enabled and "ACTIVÉ" or "DÉSACTIVÉ"))
 end
 
+-- Escape JSON strings properly
+local function escape_json_string(str)
+    if not str then return "" end
+    str = tostring(str)
+    str = str:gsub('\\', '\\\\')  -- Escape backslashes first
+    str = str:gsub('"', '\\"')    -- Escape quotes
+    str = str:gsub('\n', '\\n')   -- Escape newlines
+    str = str:gsub('\r', '\\r')   -- Escape carriage returns
+    str = str:gsub('\t', '\\t')   -- Escape tabs
+    return str
+end
+
 -- Fonction pour définir l'API HTTP depuis init.lua
 function edenai.set_http_api(api)
     http_api = api
@@ -39,8 +53,25 @@ function edenai.get_http_api()
     return http_api
 end
 
--- Conversation history management (similar to Python version)
+-- Mod storage for persistent history
+local storage = minetest.get_mod_storage()
+
+-- Conversation history management with mod_storage
 local conversation_histories = {}
+
+-- Load history from mod_storage
+local function load_history_from_storage(key)
+    local data = storage:get_string(key)
+    if data and data ~= "" then
+        return minetest.parse_json(data) or {}
+    end
+    return {}
+end
+
+-- Save history to mod_storage
+local function save_history_to_storage(key, data)
+    storage:set_string(key, minetest.write_json(data))
+end
 
 -- ConversationHistory class equivalent
 local ConversationHistory = {}
@@ -50,27 +81,42 @@ function ConversationHistory.new()
     local self = setmetatable({}, ConversationHistory)
     self.exchanges = {}  -- Recent exchanges (max 10)
     self.compacted = {}  -- Compacted exchanges (max 5)
+    self.is_public = false  -- Default to private history
+    self.player_name = nil
     return self
 end
 
 function ConversationHistory:add_exchange(question, response, player)
+    -- Filter out greetings
+    if self:_is_greeting(question) then
+        return
+    end
+
     local exchange = {
         question = question,
         response = response,
-        player = player or "inconnu",
+        player = player or "unknown",
         timestamp = os.time(),
         is_compacted = false
     }
 
     table.insert(self.exchanges, exchange)
 
-    -- Compact oldest exchanges if we exceed 10
+    -- Trigger compaction if we have more than 10 exchanges
     if #self.exchanges > 10 then
         self:_compact_oldest_exchanges()
     end
+    
+    -- Save to storage
+    self:save_to_storage()
 end
 
 function ConversationHistory:_compact_oldest_exchanges()
+    -- Check if we have enough exchanges to compact
+    if #self.exchanges < 5 then
+        return
+    end
+
     -- Remove oldest compacted if we have 5
     if #self.compacted >= 5 then
         table.remove(self.compacted, 1)
@@ -84,52 +130,57 @@ function ConversationHistory:_compact_oldest_exchanges()
         end
     end
 
-    -- Create compacted summary
-    local summary = self:_create_compacted_summary(to_compact)
-    table.insert(self.compacted, {
-        summary = summary,
-        timestamp = os.time(),
-        is_compacted = true,
-        original_count = #to_compact
-    })
+    -- Create compacted summary using EdenAI
+    self:_create_compacted_summary_with_ai(to_compact)
 end
 
-function ConversationHistory:_create_compacted_summary(exchanges)
+function ConversationHistory:_create_compacted_summary_with_ai(exchanges)
     if #exchanges == 0 then
-        return ""
+        return
     end
 
-    -- Extract main themes (Luanti-related keywords)
-    local themes = {}
-    local keywords = {
-        "craft", "miner", "construire", "maison", "ferme", "mobs", "diamant",
-        "bois", "pierre", "outil", "armure", "cuisine", "exploration", "cave",
-        "village", "fer", "charbon", "redstone", "enchantement", "nether"
-    }
-
+    -- Prepare conversation text for AI compaction
+    local conversation_text = ""
+    local start_time = nil
+    local end_time = nil
+    
     for _, exchange in ipairs(exchanges) do
-        local q_words = self:_split_words(exchange.question:lower())
-        local r_words = self:_split_words(exchange.response:lower())
-
-        for _, word in ipairs(q_words) do
-            for _, keyword in ipairs(keywords) do
-                if word == keyword and not self:_contains(themes, keyword) then
-                    table.insert(themes, keyword)
-                end
-            end
+        conversation_text = conversation_text .. exchange.player .. ": " .. exchange.question .. "\n"
+        conversation_text = conversation_text .. "BotKopain: " .. exchange.response .. "\n"
+        
+        if not start_time or exchange.timestamp < start_time then
+            start_time = exchange.timestamp
         end
-
-        for _, word in ipairs(r_words) do
-            for _, keyword in ipairs(keywords) do
-                if word == keyword and not self:_contains(themes, keyword) then
-                    table.insert(themes, keyword)
-                end
-            end
+        if not end_time or exchange.timestamp > end_time then
+            end_time = exchange.timestamp
         end
     end
 
-    local themes_str = #themes > 0 and table.concat(themes, ", ", 1, math.min(3, #themes)) or "discussion générale"
-    return "[Échanges antérieurs: " .. themes_str .. " - " .. #exchanges .. " interactions]"
+    -- Create compaction prompt
+    local compaction_prompt = "Please create a concise summary (100-150 words) of this conversation that captures the main topics, context, and any important information. Focus on what was discussed, learned, or accomplished. Format as: '[Previous conversations: SUMMARY - DATE RANGE]'\n\nConversation:\n" .. conversation_text
+
+    -- Call EdenAI for compaction
+    edenai.compact_conversation(compaction_prompt, function(summary)
+        if summary and summary ~= "" then
+            -- Format date range
+            local start_date = os.date("%Y-%m-%d %H:%M", start_time)
+            local end_date = os.date("%Y-%m-%d %H:%M", end_time)
+            local date_range = start_date .. " to " .. end_date
+            
+            -- Create compacted entry
+            local compacted_entry = {
+                summary = "[Previous conversations: " .. summary .. " - " .. date_range .. "]",
+                timestamp = os.time(),
+                is_compacted = true,
+                original_count = #exchanges,
+                start_time = start_time,
+                end_time = end_time
+            }
+            
+            table.insert(self.compacted, compacted_entry)
+            self:save_to_storage()
+        end
+    end)
 end
 
 function ConversationHistory:_split_words(text)
@@ -138,6 +189,22 @@ function ConversationHistory:_split_words(text)
         table.insert(words, word)
     end
     return words
+end
+
+function ConversationHistory:_is_greeting(message)
+    local greetings = {
+        "bonjour", "bonsoir", "salut", "hello", "hey", "hi", "coucou",
+        "bonjour!", "bonsoir!", "salut!", "hello!", "hey!", "hi!", "coucou!",
+        "'soir", "bijour", "ola"
+    }
+    
+    local lower_message = message:lower()
+    for _, greeting in ipairs(greetings) do
+        if lower_message == greeting then
+            return true
+        end
+    end
+    return false
 end
 
 function ConversationHistory:_contains(table, value)
@@ -149,44 +216,73 @@ function ConversationHistory:_contains(table, value)
     return false
 end
 
+function ConversationHistory:save_to_storage()
+    local storage_key = self.is_public and "public_history" or "player_" .. (self.player_name or "unknown")
+    local data_to_save = {
+        exchanges = {},
+        compacted = {}
+    }
+    
+    -- Save recent exchanges
+    for i = 1, math.min(#self.exchanges, 10) do
+        local exchange = self.exchanges[i]
+        table.insert(data_to_save.exchanges, {
+            question = exchange.question,
+            response = exchange.response,
+            player = exchange.player,
+            timestamp = exchange.timestamp
+        })
+    end
+    
+    -- Save compacted entries
+    for i = 1, math.min(#self.compacted, 5) do
+        local compacted = self.compacted[i]
+        table.insert(data_to_save.compacted, {
+            summary = compacted.summary,
+            timestamp = compacted.timestamp,
+            is_compacted = compacted.is_compacted,
+            original_count = compacted.original_count,
+            start_time = compacted.start_time,
+            end_time = compacted.end_time
+        })
+    end
+    
+    save_history_to_storage(storage_key, data_to_save)
+end
+
 function ConversationHistory:get_history()
     local history = {}
-
-    -- Add recent exchanges (last 5)
-    local start_idx = math.max(1, #self.exchanges - 4)
-    for i = start_idx, #self.exchanges do
-        local exchange = self.exchanges[i]
+    
+    -- Add compacted history first (as context)
+    for _, compacted in ipairs(self.compacted) do
+        table.insert(history, {
+            user = "system",
+            assistant = compacted.summary
+        })
+    end
+    
+    -- Add recent exchanges in correct format for EdenAI API
+    for _, exchange in ipairs(self.exchanges) do
         table.insert(history, {
             user = exchange.player,
             assistant = exchange.question
         })
         table.insert(history, {
-            user = "BotKopain",
+            user = "assistant", 
             assistant = exchange.response
         })
     end
-
-    -- Add older exchanges (5-10) with limitation
-    if #self.exchanges > 5 then
-        local older_start = math.max(1, #self.exchanges - 9)
-        local older_end = math.max(1, #self.exchanges - 5)
-
-        for i = older_start, older_end do
-            local exchange = self.exchanges[i]
-            local q_limited = self:_limit_words(exchange.question, 15)
-            local r_limited = self:_limit_words(exchange.response, 15)
-
-            table.insert(history, {
-                user = exchange.player,
-                assistant = q_limited .. "..."
-            })
-            table.insert(history, {
-                user = "BotKopain",
-                assistant = r_limited .. "..."
-            })
+    
+    -- Limit total history size
+    if #history > 30 then
+        local limited_history = {}
+        local start_idx = #history - 29
+        for i = start_idx, #history do
+            table.insert(limited_history, history[i])
         end
+        return limited_history
     end
-
+    
     return history
 end
 
@@ -201,10 +297,43 @@ function ConversationHistory:_limit_words(text, max_words)
     return table.concat(words, " ")
 end
 
+-- Load history from mod_storage
+local function load_history_from_storage(key)
+    local data = storage:get_string(key)
+    if data and data ~= "" then
+        return minetest.parse_json(data) or {}
+    end
+    return {}
+end
+
+-- Save history to mod_storage
+local function save_history_to_storage(key, data)
+    storage:set_string(key, minetest.write_json(data))
+end
+
 -- Get or create conversation history for a player
 function edenai.get_conversation_history(player_name)
     if not conversation_histories[player_name] then
-        conversation_histories[player_name] = ConversationHistory.new()
+        -- Load from storage first
+        local stored_history = load_history_from_storage("player_" .. player_name)
+        local history = ConversationHistory.new()
+        history.player_name = player_name
+        
+        -- Restore stored exchanges if any
+        if stored_history and #stored_history > 0 then
+            for _, exchange in ipairs(stored_history) do
+                -- Add directly without triggering save to avoid recursion
+                table.insert(history.exchanges, {
+                    question = exchange.question,
+                    response = exchange.response,
+                    player = exchange.player,
+                    timestamp = exchange.timestamp,
+                    is_compacted = false
+                })
+            end
+        end
+        
+        conversation_histories[player_name] = history
     end
     return conversation_histories[player_name]
 end
@@ -273,28 +402,86 @@ function edenai.get_chat_response(player_name, message, online_players)
         "Accept: application/json"
     }
 
-    -- Build JSON payload manually for exact format matching
+    -- Build simple JSON payload - avoid complex history for now
+    local payload = {
+        query = full_query,
+        llm_provider = "mistral",
+        llm_model = "mistral-small-latest",
+        k = 5,
+        max_tokens = 250,
+        min_score = 0.4,
+        temperature = 0.2,
+        history = {}
+    }
+    
+    -- Only add simple history if present and valid
+    if #history_list > 0 then
+        local valid_history = {}
+        for i, entry in ipairs(history_list) do
+            -- Ensure both user and assistant have content
+            if entry.assistant and entry.assistant ~= "" and entry.user then
+                table.insert(valid_history, {
+                    user = entry.user,
+                    assistant = entry.assistant
+                })
+            end
+        end
+        
+        -- Use only last 2 valid entries to avoid empty content
+        if #valid_history > 0 then
+            payload.history = {}
+            local start_idx = math.max(1, #valid_history - 1)
+            for i = start_idx, #valid_history do
+                table.insert(payload.history, valid_history[i])
+            end
+        else
+            payload.history = {}
+        end
+    else
+        payload.history = {}
+    end
+
+    -- Build JSON manually to avoid minetest.write_json issues with empty arrays
     local json_parts = {}
-    table.insert(json_parts, '"query":"' .. full_query .. '"')
+    table.insert(json_parts, '"query":"' .. escape_json_string(full_query) .. '"')
     table.insert(json_parts, '"llm_provider":"mistral"')
     table.insert(json_parts, '"llm_model":"mistral-small-latest"')
     table.insert(json_parts, '"k":5')
     table.insert(json_parts, '"max_tokens":250')
     table.insert(json_parts, '"min_score":0.4')
     table.insert(json_parts, '"temperature":0.2')
-
-    -- Add history if present
-    if #history_list > 0 then
-        local history_json = minetest.write_json(history_list)
+    
+    -- Force history to be an array, never null
+    if #payload.history > 0 then
+        local history_json = minetest.write_json(payload.history)
         table.insert(json_parts, '"history":' .. history_json)
     else
         table.insert(json_parts, '"history":[]')
     end
-
+    
     local json_data = "{" .. table.concat(json_parts, ",") .. "}"
 
+    -- DEBUG CRITICAL : Vérifier que le nouveau code est chargé
+    minetest.log("action", "[BotKopain CRITICAL] History payload type: " .. type(payload.history) .. " count: " .. tostring(#payload.history))
+    
+    debug_log("URL: " .. url)
+    debug_log("Extra Headers: " .. minetest.write_json(extra_headers))
+    debug_log("History list count: " .. tostring(#history_list))
+    if #history_list > 0 then
+        debug_log("Last history entry: " .. minetest.write_json(history_list[#history_list]))
+    end
+    debug_log("JSON Payload: " .. json_data)
+    
+    -- Vérification finale du JSON
+    if json_data:find('"history":null') then
+        minetest.log("error", "[BotKopain CRITICAL] JSON still contains null history!")
+        minetest.log("error", "[BotKopain CRITICAL] Payload history: " .. minetest.write_json(payload.history))
+    end
     minetest.log("action", "[BotKopain] Envoi requête EdenAI pour " .. player_name)
 
+    -- Make HTTP request (async) - use callback directly
+    local callback_function = nil
+    
     http_api.fetch({
         url = url,
         method = "POST",
@@ -323,6 +510,9 @@ function edenai.get_chat_response(player_name, message, online_players)
 
                 -- Add to history
                 history:add_exchange(message, formatted_response, player_name)
+                
+                -- Also add to public history if it's a bk: call
+                edenai.add_public_exchange(message, formatted_response, player_name)
 
                 debug_log("Réponse reçue d'EdenAI: " .. formatted_response:sub(1, 100) .. "...")
                 final_response = formatted_response
@@ -337,7 +527,11 @@ function edenai.get_chat_response(player_name, message, online_players)
             if result.error then
                 error_msg = error_msg .. ": " .. result.error
             end
+            if result.data then
+                error_msg = error_msg .. " - Response: " .. result.data
+            end
             minetest.log("error", "[BotKopain] " .. error_msg)
+            debug_log("Full error response: " .. minetest.write_json(result))
             final_response = error_msg
         end
 
@@ -353,9 +547,126 @@ function edenai.get_chat_response(player_name, message, online_players)
     end
 end
 
+-- Get public conversation history
+function edenai.get_public_history()
+    if not conversation_histories["public"] then
+        local stored_history = load_history_from_storage("public_history")
+        local history = ConversationHistory.new()
+        history.is_public = true
+        history.player_name = "public"
+        
+        -- Restore stored exchanges if any
+        if stored_history and #stored_history > 0 then
+            for _, exchange in ipairs(stored_history) do
+                -- Add directly without triggering save to avoid recursion
+                table.insert(history.exchanges, {
+                    question = exchange.question,
+                    response = exchange.response,
+                    player = exchange.player,
+                    timestamp = exchange.timestamp,
+                    is_compacted = false
+                })
+            end
+        end
+        
+        conversation_histories["public"] = history
+    end
+    return conversation_histories["public"]
+end
+
+-- Add exchange to public history (only for bk: calls)
+function edenai.add_public_exchange(question, response, player)
+    -- Only add if question contains "bk:" (case insensitive)
+    if question:lower():find("bk:") then
+        local public_history = edenai.get_public_history()
+        public_history:add_exchange(question, response, player)
+    end
+end
+
 -- Clear conversation history for a player
 function edenai.clear_conversation_history(player_name)
     conversation_histories[player_name] = nil
+    storage:set_string("player_" .. player_name, "")
+end
+
+-- Compact all remaining exchanges for a player
+function edenai.compact_player_history(player_name)
+    local history = conversation_histories[player_name]
+    if not history or #history.exchanges == 0 then
+        return
+    end
+    
+    -- Compact all remaining exchanges
+    history:_create_compacted_summary_with_ai(history.exchanges)
+    
+    -- Clear original exchanges after compaction
+    history.exchanges = {}
+    history:save_to_storage()
+end
+
+-- Compact public history
+function edenai.compact_public_history()
+    local history = conversation_histories["public"]
+    if not history or #history.exchanges == 0 then
+        return
+    end
+    
+    -- Compact all remaining exchanges
+    history:_create_compacted_summary_with_ai(history.exchanges)
+    
+    -- Clear original exchanges after compaction
+    history.exchanges = {}
+    history:save_to_storage()
+end
+
+-- Compact conversation using EdenAI
+function edenai.compact_conversation(prompt, callback)
+    if not http_api then
+        callback("")
+        return
+    end
+
+    -- Use same API endpoint but with compaction prompt
+    local url = string.format(EDENAI_URL_TEMPLATE, EDENAI_PROJECT_ID)
+    local extra_headers = {
+        "Authorization: Bearer " .. EDENAI_API_KEY,
+        "Content-Type: application/json",
+        "Accept: application/json"
+    }
+
+    -- Build compaction request
+    local payload = {
+        query = prompt,
+        llm_provider = "mistral",
+        llm_model = "mistral-small-latest",
+        k = 3,
+        max_tokens = 200,
+        min_score = 0.3,
+        temperature = 0.1,
+        history = {}
+    }
+    
+    local json_data = minetest.write_json(payload)
+
+    http_api.fetch({
+        url = url,
+        method = "POST",
+        data = json_data,
+        extra_headers = extra_headers,
+        timeout = 10,
+    }, function(result)
+        if result.succeeded and result.code == 200 then
+            local response_data = minetest.parse_json(result.data)
+            if response_data then
+                local summary = response_data.result or response_data.answer or response_data.response or ""
+                callback(summary)
+            else
+                callback("")
+            end
+        else
+            callback("")
+        end
+    end)
 end
 
 -- Get all conversation histories (for debugging)
