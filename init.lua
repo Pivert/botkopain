@@ -703,6 +703,149 @@ end
 
 minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
 
+-- Load the readbooks module
+local readbooks = dofile(minetest.get_modpath("botkopain") .. "/readbooks.lua")
+
+-- Commande /readbooks pour exporter tous les livres du jeu en XML
+minetest.register_chatcommand("readbooks", {
+    description = "Exporter tous les livres du jeu dans un fichier XML (/tmp/books.xml)",
+    privs = {server = true},
+    func = function(name)
+        minetest.chat_send_player(name, "📚 Extraction de tous les livres du jeu...")
+        
+        -- Get book stats first
+        local stats = readbooks.get_book_stats()
+        minetest.chat_send_player(name, "📊 Statistiques des livres trouvés:")
+        minetest.chat_send_player(name, "  • Définitions de livres: " .. stats.total_definitions)
+        minetest.chat_send_player(name, "  • Livres réels dans le monde: " .. stats.total_world_books)
+        minetest.chat_send_player(name, "  • Livres dans les inventaires: " .. stats.total_inventory_books)
+        minetest.chat_send_player(name, "  • Total général: " .. stats.total_books)
+        
+        -- Show book types
+        if next(stats.item_types) then
+            minetest.chat_send_player(name, "  • Types d'items:")
+            for book_type, count in pairs(stats.item_types) do
+                minetest.chat_send_player(name, "    - " .. book_type .. ": " .. count)
+            end
+        end
+        
+        if next(stats.node_types) then
+            minetest.chat_send_player(name, "  • Types de nodes:")
+            for book_type, count in pairs(stats.node_types) do
+                minetest.chat_send_player(name, "    - " .. book_type .. ": " .. count)
+            end
+        end
+        
+        -- Export books
+        minetest.chat_send_player(name, "💾 Export vers books.xml dans le dossier du monde...")
+        local success, message = readbooks.export_books_to_xml()
+        
+        if success then
+            minetest.chat_send_player(name, "✅ " .. message)
+            minetest.chat_send_player(name, "📖 Le fichier XML contient les métadonnées et le texte de chaque livre")
+            minetest.chat_send_player(name, "📁 Chemin: " .. minetest.get_worldpath() .. "/books.xml")
+        else
+            minetest.chat_send_player(name, "❌ Erreur: " .. message)
+        end
+        
+        return true
+    end,
+})
+
+-- Commande /readbooks_get pour récupérer le XML des livres depuis le stockage du mod
+minetest.register_chatcommand("readbooks_get", {
+    description = "Récupérer le XML des livres depuis le stockage du mod",
+    privs = {server = true},
+    func = function(name)
+        local storage = minetest.get_mod_storage()
+        local xml_content = storage:get_string("books_xml")
+        
+        if xml_content == "" then
+            minetest.chat_send_player(name, "❌ Aucun XML trouvé dans le stockage")
+            minetest.chat_send_player(name, "ℹ️ Utilisez /readbooks d'abord pour générer l'export")
+            return true
+        end
+        
+        local export_date = storage:get_string("export_date")
+        minetest.chat_send_player(name, "📚 XML trouvé (export du " .. export_date .. ")")
+        
+        -- Option 1: Save to a file in world directory (if possible)
+        local file_path = minetest.get_worldpath() .. "/books_from_storage.xml"
+        local file = io.open(file_path, "w")
+        
+        if file then
+            file:write(xml_content)
+            file:close()
+            minetest.chat_send_player(name, "✅ XML sauvegardé dans: " .. file_path)
+        else
+            -- Option 2: Show first few lines in chat
+            minetest.chat_send_player(name, "ℹ️ Impossible d'écrire le fichier, voici le début du XML:")
+            local lines = {}
+            for line in xml_content:gmatch("[^\n]+") do
+                table.insert(lines, line)
+                if #lines >= 15 then break end
+            end
+            
+            for i, line in ipairs(lines) do
+                minetest.chat_send_player(name, line)
+            end
+            
+            if #xml_content > 1000 then
+                minetest.chat_send_player(name, "... (" .. (#xml_content - 1000) .. " caractères supplémentaires)")
+            end
+        end
+        
+        return true
+    end,
+})
+
+-- Commande /readbooks_stats pour voir les statistiques des livres sans export
+minetest.register_chatcommand("readbooks_stats", {
+    description = "Afficher les statistiques des livres dans le jeu",
+    privs = {botkopain = true},
+    func = function(name)
+        local stats = readbooks.get_book_stats()
+        
+        minetest.chat_send_player(name, "=== 📚 STATISTIQUES DES LIVRES ===")
+        minetest.chat_send_player(name, "Définitions de livres: " .. stats.total_definitions)
+        minetest.chat_send_player(name, "Livres réels dans le monde: " .. stats.total_world_books)
+        minetest.chat_send_player(name, "Livres dans les inventaires: " .. stats.total_inventory_books)
+        minetest.chat_send_player(name, "Total général: " .. stats.total_books)
+        
+        if next(stats.item_types) then
+            minetest.chat_send_player(name, "Types d'items:")
+            for book_type, count in pairs(stats.item_types) do
+                minetest.chat_send_player(name, "  • " .. book_type .. ": " .. count)
+            end
+        end
+        
+        if next(stats.node_types) then
+            minetest.chat_send_player(name, "Types de nodes:")
+            for book_type, count in pairs(stats.node_types) do
+                minetest.chat_send_player(name, "  • " .. book_type .. ": " .. count)
+            end
+        end
+        
+        if next(stats.world_book_authors) then
+            minetest.chat_send_player(name, "Auteurs dans le monde:")
+            for author, count in pairs(stats.world_book_authors) do
+                minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
+            end
+        end
+        
+        if next(stats.inventory_book_authors) then
+            minetest.chat_send_player(name, "Auteurs dans les inventaires:")
+            for author, count in pairs(stats.inventory_book_authors) do
+                minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
+            end
+        end
+        
+        minetest.chat_send_player(name, "ℹ️ Utilisez /readbooks pour exporter vers XML")
+        
+        return true
+    end,
+})
+
 -- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
 -- avec une limite de 2 heures entre chaque salutation par joueur
 
