@@ -400,9 +400,14 @@ local function process_edenai_request(player_name, message, is_public)
     end)
 end
 
--- Enregistrement du privilège
+-- Enregistrement des privilèges
 minetest.register_privilege("botkopain", {
     description = "Permet d'interagir avec BotKopain",
+    give_to_singleplayer = true,
+})
+
+minetest.register_privilege("botkopain_admin", {
+    description = "Permet d'utiliser les commandes administratives de BotKopain",
     give_to_singleplayer = true,
 })
 
@@ -702,6 +707,170 @@ for _, test_file in ipairs(test_files) do
 end
 
 minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
+
+-- Load the readbooks module
+local readbooks = dofile(minetest.get_modpath("botkopain") .. "/readbooks.lua")
+
+-- Load the book player manager
+local bookplayer_manager = dofile(minetest.get_modpath("botkopain") .. "/bookplayer_manager.lua")
+
+-- Commande /readbooks pour exporter tous les livres du jeu en XML
+minetest.register_chatcommand("readbooks", {
+    description = "Exporter tous les livres du jeu dans books.xml (dossier du monde)",
+    privs = {botkopain_admin = true},
+    func = function(name)
+        minetest.chat_send_player(name, "📚 Extraction de tous les livres du jeu...")
+        
+        -- Get book stats first
+        local stats = readbooks.get_book_stats()
+        minetest.chat_send_player(name, "📊 Statistiques des livres trouvés:")
+        minetest.chat_send_player(name, "  • Définitions de livres: " .. stats.total_definitions)
+        minetest.chat_send_player(name, "  • Livres réels dans le monde: " .. stats.total_world_books)
+        minetest.chat_send_player(name, "  • Livres dans les inventaires: " .. stats.total_inventory_books)
+        minetest.chat_send_player(name, "  • Livres dans les conteneurs: " .. stats.total_container_books)
+        minetest.chat_send_player(name, "  • Total livres réels: " .. stats.total_real_books)
+        
+        -- Show book types
+        if next(stats.item_types) then
+            minetest.chat_send_player(name, "  • Types d'items:")
+            for book_type, count in pairs(stats.item_types) do
+                minetest.chat_send_player(name, "    - " .. book_type .. ": " .. count)
+            end
+        end
+        
+        if next(stats.node_types) then
+            minetest.chat_send_player(name, "  • Types de nodes:")
+            for book_type, count in pairs(stats.node_types) do
+                minetest.chat_send_player(name, "    - " .. book_type .. ": " .. count)
+            end
+        end
+        
+        -- Export books
+        minetest.chat_send_player(name, "💾 Export vers books.xml dans le dossier du monde...")
+        local success, message = readbooks.export_books_to_xml()
+        
+        if success then
+            minetest.chat_send_player(name, "✅ Export réussi:")
+            for line in message:gmatch("[^\n]+") do
+                minetest.chat_send_player(name, line)
+            end
+        else
+            minetest.chat_send_player(name, "❌ Erreur: " .. message)
+        end
+        
+        return true
+    end,
+})
+
+-- Commande /readbooks_stats pour voir les statistiques des livres sans export
+minetest.register_chatcommand("readbooks_stats", {
+    description = "Afficher les statistiques des livres dans le jeu",
+    privs = {botkopain_admin = true},
+    func = function(name)
+        local stats = readbooks.get_book_stats()
+        
+        minetest.chat_send_player(name, "=== 📚 STATISTIQUES DES LIVRES ===")
+        minetest.chat_send_player(name, "Définitions de livres: " .. stats.total_definitions)
+        minetest.chat_send_player(name, "Livres réels dans le monde: " .. stats.total_world_books)
+        minetest.chat_send_player(name, "Livres dans les inventaires: " .. stats.total_inventory_books)
+        minetest.chat_send_player(name, "Livres dans les conteneurs: " .. stats.total_container_books)
+        minetest.chat_send_player(name, "Total livres réels: " .. stats.total_real_books)
+        
+        if next(stats.item_types) then
+            minetest.chat_send_player(name, "Types d'items:")
+            for book_type, count in pairs(stats.item_types) do
+                minetest.chat_send_player(name, "  • " .. book_type .. ": " .. count)
+            end
+        end
+        
+        if next(stats.node_types) then
+            minetest.chat_send_player(name, "Types de nodes:")
+            for book_type, count in pairs(stats.node_types) do
+                minetest.chat_send_player(name, "  • " .. book_type .. ": " .. count)
+            end
+        end
+        
+        if next(stats.world_book_authors) then
+            minetest.chat_send_player(name, "Auteurs dans le monde:")
+            for author, count in pairs(stats.world_book_authors) do
+                minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
+            end
+        end
+        
+        if next(stats.inventory_book_authors) then
+            minetest.chat_send_player(name, "Auteurs dans les inventaires:")
+            for author, count in pairs(stats.inventory_book_authors) do
+                minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
+            end
+        end
+        
+        if next(stats.container_book_authors) then
+            minetest.chat_send_player(name, "Auteurs dans les conteneurs:")
+            for author, count in pairs(stats.container_book_authors) do
+                minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
+            end
+        end
+        
+        minetest.chat_send_player(name, "ℹ️ Utilisez /readbooks pour exporter vers XML")
+        
+        return true
+    end,
+})
+
+-- Commande /bookplayerlist pour lister les joueurs gérés
+minetest.register_chatcommand("bookplayerlist", {
+    description = "Lister les joueurs dont les livres sont extraits",
+    privs = {botkopain_admin = true},
+    func = function(name)
+        local players = bookplayer_manager.get_managed_players()
+        
+        if #players == 0 then
+            minetest.chat_send_player(name, "ℹ️ Aucun joueur dans la liste - tous les livres seront extraits")
+            return true
+        end
+        
+        minetest.chat_send_player(name, "=== 📚 JOUEURS GÉRÉS ===")
+        for i, player_name in ipairs(players) do
+            minetest.chat_send_player(name, i .. ". " .. player_name)
+        end
+        
+        return true
+    end,
+})
+
+-- Commande /bookplayeradd pour ajouter un joueur à la liste
+minetest.register_chatcommand("bookplayeradd", {
+    params = "<player_name>",
+    description = "Ajouter un joueur à la liste des joueurs gérés",
+    privs = {botkopain_admin = true},
+    func = function(name, param)
+        if param == "" then
+            return false, "Usage: /bookplayeradd <nom_du_joueur>"
+        end
+        
+        local success, message = bookplayer_manager.add_player(param)
+        minetest.chat_send_player(name, message)
+        
+        return success
+    end,
+})
+
+-- Commande /bookplayerrm pour retirer un joueur de la liste
+minetest.register_chatcommand("bookplayerrm", {
+    params = "<player_name>",
+    description = "Retirer un joueur de la liste des joueurs gérés",
+    privs = {botkopain_admin = true},
+    func = function(name, param)
+        if param == "" then
+            return false, "Usage: /bookplayerrm <nom_du_joueur>"
+        end
+        
+        local success, message = bookplayer_manager.remove_player(param)
+        minetest.chat_send_player(name, message)
+        
+        return success
+    end,
+})
 
 -- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
 -- avec une limite de 2 heures entre chaque salutation par joueur
