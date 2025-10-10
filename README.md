@@ -25,6 +25,11 @@ botkopain_edenai_project_id = votre_project_id_edenai
 secure.http_mods = botkopain
 ```
 
+### 2. Privilèges
+Deux nouveaux privilèges sont disponibles :
+- `botkopain` : Permet d'interagir avec le bot
+- `botkopain_admin` : Permet d'utiliser les commandes administratives du bot, y compris les commandes de lecture de livres
+
 ### 2. Obtenir vos clés EdenAI
 1. Créez un compte sur [EdenAI](https://www.edenai.co)
 2. Créez un nouveau projet
@@ -49,6 +54,16 @@ Parlez simplement dans le chat - BotKopain répondra automatiquement si vous êt
 ```
 /bkstatus         - Vérifier l'état de la connexion EdenAI
 /bk_clear [joueur] - Effacer l'historique de conversation (admin)
+```
+
+#### Commandes de gestion des livres
+```
+/readbooks        - Extraire tous les livres du jeu (nécessite botkopain_admin)
+/readbooks_stats  - Afficher les statistiques des livres (nécessite botkopain_admin)
+/readbooks_get    - Récupérer le XML des livres depuis le stockage (nécessite botkopain_admin)
+/bookplayerlist   - Lister les joueurs gérés (nécessite botkopain_admin)
+/bookplayeradd    - Ajouter un joueur à la liste (nécessite botkopain_admin)
+/bookplayerrm     - Retirer un joueur de la liste (nécessite botkopain_admin)
 ```
 
 #### Partage de conversations

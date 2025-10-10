@@ -1,7 +1,10 @@
--- BotKopain Book Reader - Extract all books from the game and save to XML
+-- BotKopain Book Reader - Final version with simplified cleaning
 -- Supports multiple book formats: default, homedecor, mineclonia, etc.
 
 local readbooks = {}
+
+-- Load the book player manager
+local bookplayer_manager = dofile(minetest.get_modpath("botkopain") .. "/bookplayer_manager.lua")
 
 -- XML escaping function
 local function escape_xml(text)
@@ -19,28 +22,15 @@ local function get_book_items()
     local registered_items = minetest.registered_items
     
     for item_name, item_def in pairs(registered_items) do
-        -- Check if item is a book by groups or name patterns
         local is_book = false
         
-        -- Check groups
-        if item_def.groups then
-            if item_def.groups.book and item_def.groups.book > 0 then
-                is_book = true
-            end
-        end
-        
-        -- Check name patterns
-        if not is_book then
+        if item_def.groups and item_def.groups.book and item_def.groups.book > 0 then
+            is_book = true
+        else
             local lower_name = item_name:lower()
             if lower_name:match("book") or lower_name:match("livre") then
                 is_book = true
-            end
-        end
-        
-        -- Check description patterns
-        if not is_book and item_def.description then
-            local desc = item_def.description:lower()
-            if desc:match("book") or desc:match("livre") or desc:match("cahier") then
+            elseif item_def.description and item_def.description:lower():match("book") then
                 is_book = true
             end
         end
@@ -57,36 +47,21 @@ local function get_book_items()
     return book_items
 end
 
--- Get all registered book nodes (for homedecor style books)
+-- Get all registered book nodes
 local function get_book_nodes()
     local book_nodes = {}
     local registered_nodes = minetest.registered_nodes
     
     for node_name, node_def in pairs(registered_nodes) do
-        -- Check if node is a book by name patterns or groups
         local is_book = false
+        local lower_name = node_name:lower()
         
-        -- Check groups
-        if node_def.groups then
-            if node_def.groups.book and node_def.groups.book > 0 then
-                is_book = true
-            end
-        end
-        
-        -- Check name patterns
-        if not is_book then
-            local lower_name = node_name:lower()
-            if lower_name:match("book") or lower_name:match("livre") then
-                is_book = true
-            end
-        end
-        
-        -- Check description patterns
-        if not is_book and node_def.description then
-            local desc = node_def.description:lower()
-            if desc:match("book") or desc:match("livre") or desc:match("cahier") then
-                is_book = true
-            end
+        if node_def.groups and node_def.groups.book and node_def.groups.book > 0 then
+            is_book = true
+        elseif lower_name:match("book") or lower_name:match("livre") then
+            is_book = true
+        elseif node_def.description and node_def.description:lower():match("book") then
+            is_book = true
         end
         
         if is_book then
@@ -112,26 +87,19 @@ local function extract_book_content(item_name, item_def)
         pages = 0
     }
     
-    -- Try to determine book type based on item name and properties
     local lower_name = item_name:lower()
     
-    -- Default minetest book
     if lower_name:match("default:book_written") or lower_name:match("default:book") then
         content.type = "default"
-    -- Mineclonia books
     elseif lower_name:match("mcl_books:book") or lower_name:match("mcl_books:writable_book") then
         content.type = "mineclonia"
-    -- Homedecor books
     elseif lower_name:match("homedecor:book") then
         content.type = "homedecor"
-    -- Generic book detection
     elseif lower_name:match("book") then
         content.type = "generic"
     end
     
-    -- Try to get default content based on type
     if content.type == "default" then
-        -- Default books often have sample content
         if lower_name:match("written") then
             content.title = "Sample Written Book"
             content.text = "This is a sample written book from the default minetest game."
@@ -156,7 +124,66 @@ local function extract_book_content(item_name, item_def)
     return content
 end
 
--- Extract book content from ACTUAL node metadata (for real books in the world)
+-- Clean Luanti formatting codes and special characters - SIMPLIFIED
+local function clean_luanti_text(text)
+    if not text or text == "" then return "" end
+    
+    -- Remove CDATA markers if present
+    text = text:gsub("^<!%[CDATA%[", "")
+    text = text:gsub("%]%]>$", "")
+    
+    -- Replace control characters with spaces instead of removing them
+    text = text:gsub("[%z\x01-\x1f\x7f]", " ")
+    
+    -- Handle HTML entities - final simplified and robust approach
+    
+    -- 1. Handle the most common entities (apostrophes and quotes)
+    text = text:gsub("&apos;", "'")
+    text = text:gsub("&quot;", '"')
+    
+    -- 2. Handle numeric entities (decimal) - for apostrophes and quotes
+    text = text:gsub("&#39;", "'")  -- apostrophe
+    text = text:gsub("&#34;", '"')  -- quote
+    
+    -- 3. Handle other common entities
+    text = text:gsub("&amp;", "&")
+    text = text:gsub("&lt;", "<")
+    text = text:gsub("&gt;", ">")
+    
+    -- 4. Handle numeric entities for the most common punctuation
+    text = text:gsub("&#(%d+);", function(n) 
+        n = tonumber(n)
+        if n and n < 128 then
+            return string.char(n)
+        end
+        return "&#" .. n .. ";"
+    end)
+    
+    -- 5. Handle hex entities
+    text = text:gsub("&#x(%x+);", function(h)
+        local n = tonumber(h, 16)
+        if n and n < 128 then
+            return string.char(n)
+        end
+        return "&#x" .. h .. ";"
+    end)
+    
+    -- 6. Clean up any remaining isolated & characters
+    text = text:gsub("&(%s)", "%1")        -- & followed by space
+    text = text:gsub("&([%p])", "%1")       -- & followed by punctuation
+    text = text:gsub("^&", "")              -- & at start
+    text = text:gsub("&$", "")              -- & at end
+    
+    -- Simple approach: just clean up spaces and basic formatting
+    -- Don't try to be too smart about F/E patterns - they might be legitimate
+    text = text:gsub("%s+", " ")
+    text = text:gsub("^%s*", "")
+    text = text:gsub("%s*$", "")
+    
+    return text
+end
+
+-- Extract book content from ACTUAL node metadata
 local function extract_book_content_from_meta(meta, item_name)
     local content = {
         title = "",
@@ -165,24 +192,54 @@ local function extract_book_content_from_meta(meta, item_name)
         description = "",
         type = "real_book",
         pages = 0,
-        location = "unknown"
+        location = "unknown",
+        coordinates = nil
     }
     
     if not meta then return content end
     
-    -- Get actual book data from metadata
-    content.title = meta:get_string("title") or ""
-    content.text = meta:get_string("text") or ""
-    content.author = meta:get_string("owner") or meta:get_string("author") or ""
-    content.description = meta:get_string("description") or ""
+    -- Get actual book data from metadata - try multiple field names
+    content.title = meta:get_string("title") ~= "" and meta:get_string("title") or ""
+    content.text = meta:get_string("text") ~= "" and meta:get_string("text") or ""
+    content.author = meta:get_string("owner") ~= "" and meta:get_string("owner") or ""
+    content.description = meta:get_string("description") ~= "" and meta:get_string("description") or ""
     
-    -- Handle different book formats
-    if content.title == "" and content.text == "" then
-        -- Try alternative field names
-        content.title = meta:get_string("book_title") or "Untitled Book"
-        content.text = meta:get_string("book_text") or meta:get_string("content") or ""
-        content.author = meta:get_string("book_author") or meta:get_string("player_name") or "Unknown"
+    -- Try alternative field names if main ones are empty
+    if content.title == "" then
+        content.title = meta:get_string("book_title") ~= "" and meta:get_string("book_title") or ""
     end
+    if content.title == "" then
+        content.title = meta:get_string("name") ~= "" and meta:get_string("name") or "Untitled Book"
+    end
+    
+    if content.text == "" then
+        content.text = meta:get_string("book_text") ~= "" and meta:get_string("book_text") or ""
+    end
+    if content.text == "" then
+        content.text = meta:get_string("content") ~= "" and meta:get_string("content") or ""
+    end
+    if content.text == "" then
+        content.text = meta:get_string("pages") ~= "" and meta:get_string("pages") or ""
+    end
+    
+    if content.author == "" then
+        content.author = meta:get_string("author") ~= "" and meta:get_string("author") or ""
+    end
+    if content.author == "" then
+        content.author = meta:get_string("book_author") ~= "" and meta:get_string("book_author") or ""
+    end
+    if content.author == "" then
+        content.author = meta:get_string("player_name") ~= "" and meta:get_string("player_name") or "Unknown"
+    end
+    
+    if content.description == "" then
+        content.description = meta:get_string("infotext") ~= "" and meta:get_string("infotext") or ""
+    end
+    
+    -- Clean up Luanti formatting codes and special characters
+    content.title = clean_luanti_text(content.title)
+    content.text = clean_luanti_text(content.text)
+    content.description = clean_luanti_text(content.description)
     
     -- Count pages (approximation)
     if content.text and content.text ~= "" then
@@ -202,7 +259,6 @@ local function scan_world_books()
         local is_book = false
         local lower_name = node_name:lower()
         
-        -- Check if it's a book node
         if node_def.groups and node_def.groups.book and node_def.groups.book > 0 then
             is_book = true
         elseif lower_name:match("book") or lower_name:match("livre") then
@@ -250,6 +306,11 @@ local function scan_world_books()
                                 if book_content.text ~= "" or book_content.title ~= "" then
                                     book_content.location = pos_key
                                     book_content.node_name = node.name
+                                    book_content.coordinates = {
+                                        x = scan_pos.x,
+                                        y = scan_pos.y,
+                                        z = scan_pos.z
+                                    }
                                     table.insert(world_books, book_content)
                                 end
                             end
@@ -268,31 +329,46 @@ local function scan_player_inventories()
     local inventory_books = {}
     local players = minetest.get_connected_players()
     
+    -- Get managed players list
+    local managed_players = bookplayer_manager.get_managed_players()
+    local filter_enabled = #managed_players > 0
+    
     for _, player in ipairs(players) do
         local player_name = player:get_player_name()
-        local inv = player:get_inventory()
         
-        if inv then
-            -- Scan main inventory
-            local main_list = inv:get_list("main")
-            if main_list then
-                for i, itemstack in ipairs(main_list) do
-                    if not itemstack:is_empty() then
-                        local item_name = itemstack:get_name()
-                        local lower_name = item_name:lower()
-                        
-                        -- Check if it's a book item
-                        if lower_name:match("book") and not lower_name:match("bookshelf") then
-                            local meta = itemstack:get_meta()
-                            if meta then
-                                local book_content = extract_book_content_from_meta(meta, item_name)
-                                
-                                -- Only add if it has real content
-                                if book_content.text ~= "" or book_content.title ~= "" then
-                                    book_content.location = "inventory:" .. player_name .. ":" .. i
-                                    book_content.node_name = item_name
-                                    book_content.owner = player_name
-                                    table.insert(inventory_books, book_content)
+        -- Skip if filtering is enabled and player is not managed
+        if filter_enabled and not bookplayer_manager.is_player_managed(player_name) then
+            -- Skip this player
+        else
+            local inv = player:get_inventory()
+            
+            if inv then
+                -- Scan main inventory
+                local main_list = inv:get_list("main")
+                if main_list then
+                    for i, itemstack in ipairs(main_list) do
+                        if not itemstack:is_empty() then
+                            local item_name = itemstack:get_name()
+                            local lower_name = item_name:lower()
+                            
+                            -- Check if it's a book item
+                            if lower_name:match("book") and not lower_name:match("bookshelf") then
+                                local meta = itemstack:get_meta()
+                                if meta then
+                                    local book_content = extract_book_content_from_meta(meta, item_name)
+                                    
+                                    -- Only add if it has real content
+                                    if book_content.text ~= "" or book_content.title ~= "" then
+                                        book_content.location = "inventory:" .. player_name .. ":" .. i
+                                        book_content.node_name = item_name
+                                        book_content.owner = player_name
+                                        book_content.coordinates = {
+                                            source = "player_inventory",
+                                            player = player_name,
+                                            slot = i
+                                        }
+                                        table.insert(inventory_books, book_content)
+                                    end
                                 end
                             end
                         end
@@ -305,7 +381,89 @@ local function scan_player_inventories()
     return inventory_books
 end
 
--- Generate XML content for all books (including real instances)
+-- Scan containers (chests, bookshelves, etc.) for books
+local function scan_containers()
+    local container_books = {}
+    local players = minetest.get_connected_players()
+    local scanned_positions = {}
+    
+    for _, player in ipairs(players) do
+        local pos = player:get_pos()
+        
+        -- Scan area around each player for containers
+        for x = -16, 16 do
+            for y = -8, 8 do
+                for z = -16, 16 do
+                    local scan_pos = {
+                        x = math.floor(pos.x + x),
+                        y = math.floor(pos.y + y),
+                        z = math.floor(pos.z + z)
+                    }
+                    
+                    -- Avoid scanning same position multiple times
+                    local pos_key = scan_pos.x .. "," .. scan_pos.y .. "," .. scan_pos.z
+                    if not scanned_positions[pos_key] then
+                        scanned_positions[pos_key] = true
+                        
+                        local node = minetest.get_node_or_nil(scan_pos)
+                        if node then
+                            local node_name = node.name:lower()
+                            
+                            -- Check if it's a container (chest, bookshelf, etc.)
+                            if node_name:match("chest") or node_name:match("bookshelf") or 
+                               node_name:match("container") or node_name:match("box") or
+                               (node_name:match("default") and node_name:match("bookshelf")) then
+                                
+                                local meta = minetest.get_meta(scan_pos)
+                                if meta then
+                                    -- Try to get inventory from metadata
+                                    local inv = meta:get_inventory()
+                                    if inv then
+                                        -- Scan all lists in the inventory
+                                        local lists = inv:get_lists()
+                                        for list_name, list in pairs(lists) do
+                                            for i, itemstack in ipairs(list) do
+                                                if not itemstack:is_empty() then
+                                                    local item_name = itemstack:get_name()
+                                                    local lower_name = item_name:lower()
+                                                    
+                                                    -- Check if it's a book item
+                                                    if lower_name:match("book") and not lower_name:match("bookshelf") then
+                                                        local item_meta = itemstack:get_meta()
+                                                        if item_meta then
+                                                            local book_content = extract_book_content_from_meta(item_meta, item_name)
+                                                            
+                                                            -- Only add if it has real content
+                                                            if book_content.text ~= "" or book_content.title ~= "" then
+                                                                book_content.location = "container:" .. pos_key .. ":" .. list_name .. ":" .. i
+                                                                book_content.node_name = item_name
+                                                                book_content.container_type = node.name
+                                                                book_content.coordinates = {
+                                                                    x = scan_pos.x,
+                                                                    y = scan_pos.y,
+                                                                    z = scan_pos.z
+                                                                }
+                                                                table.insert(container_books, book_content)
+                                                            end
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return container_books
+end
+
+-- Generate XML content for book instances only (real books with content)
 local function generate_books_xml()
     local xml_parts = {}
     
@@ -321,6 +479,7 @@ local function generate_books_xml()
     -- Scan for real books in the world
     local world_books = scan_world_books()
     local inventory_books = scan_player_inventories()
+    local container_books = scan_containers()
     
     -- Add real books from world
     for _, book in ipairs(world_books) do
@@ -331,10 +490,17 @@ local function generate_books_xml()
         table.insert(xml_parts, '    <title>' .. escape_xml(book.title) .. '</title>')
         table.insert(xml_parts, '    <author>' .. escape_xml(book.author) .. '</author>')
         table.insert(xml_parts, '    <description>' .. escape_xml(book.description) .. '</description>')
-        table.insert(xml_parts, '    <text><![CDATA[' .. book.text .. ']]></text>')
+        table.insert(xml_parts, '    <text>' .. escape_xml(book.text) .. '</text>')
         table.insert(xml_parts, '    <pages>' .. book.pages .. '</pages>')
         table.insert(xml_parts, '    <location>' .. escape_xml(book.location) .. '</location>')
         table.insert(xml_parts, '    <source>world</source>')
+        if book.coordinates then
+            table.insert(xml_parts, '    <coordinates>')
+            table.insert(xml_parts, '      <x>' .. book.coordinates.x .. '</x>')
+            table.insert(xml_parts, '      <y>' .. book.coordinates.y .. '</y>')
+            table.insert(xml_parts, '      <z>' .. book.coordinates.z .. '</z>')
+            table.insert(xml_parts, '    </coordinates>')
+        end
         table.insert(xml_parts, '  </book>')
     end
     
@@ -347,68 +513,41 @@ local function generate_books_xml()
         table.insert(xml_parts, '    <title>' .. escape_xml(book.title) .. '</title>')
         table.insert(xml_parts, '    <author>' .. escape_xml(book.author) .. '</author>')
         table.insert(xml_parts, '    <description>' .. escape_xml(book.description) .. '</description>')
-        table.insert(xml_parts, '    <text><![CDATA[' .. book.text .. ']]></text>')
+        table.insert(xml_parts, '    <text>' .. escape_xml(book.text) .. '</text>')
         table.insert(xml_parts, '    <pages>' .. book.pages .. '</pages>')
         table.insert(xml_parts, '    <location>' .. escape_xml(book.location) .. '</location>')
         table.insert(xml_parts, '    <source>inventory</source>')
+        if book.coordinates then
+            table.insert(xml_parts, '    <coordinates>')
+            table.insert(xml_parts, '      <source>' .. book.coordinates.source .. '</source>')
+            table.insert(xml_parts, '      <player>' .. book.coordinates.player .. '</player>')
+            table.insert(xml_parts, '      <slot>' .. book.coordinates.slot .. '</slot>')
+            table.insert(xml_parts, '    </coordinates>')
+        end
         table.insert(xml_parts, '  </book>')
     end
     
-    -- Also include book definitions for reference
-    local book_items = get_book_items()
-    local book_nodes = get_book_nodes()
-    
-    -- Process book item definitions
-    for _, item in ipairs(book_items) do
-        local content = extract_book_content(item.name, item)
-        
+    -- Add real books from containers
+    for _, book in ipairs(container_books) do
         table.insert(xml_parts, '  <book>')
-        table.insert(xml_parts, '    <name>' .. escape_xml(item.name) .. '</name>')
-        table.insert(xml_parts, '    <type>item_definition</type>')
-        table.insert(xml_parts, '    <book_type>' .. escape_xml(content.type) .. '</book_type>')
-        table.insert(xml_parts, '    <title>' .. escape_xml(content.title) .. '</title>')
-        table.insert(xml_parts, '    <author>' .. escape_xml(content.author) .. '</author>')
-        table.insert(xml_parts, '    <description>' .. escape_xml(content.description) .. '</description>')
-        table.insert(xml_parts, '    <text><![CDATA[' .. content.text .. ']]></text>')
-        table.insert(xml_parts, '    <pages>' .. content.pages .. '</pages>')
-        table.insert(xml_parts, '    <source>definition</source>')
-        
-        -- Add groups information
-        if next(item.groups) then
-            table.insert(xml_parts, '    <groups>')
-            for group_name, group_value in pairs(item.groups) do
-                table.insert(xml_parts, '      <group name="' .. escape_xml(group_name) .. '">' .. group_value .. '</group>')
-            end
-            table.insert(xml_parts, '    </groups>')
+        table.insert(xml_parts, '    <name>' .. escape_xml(book.node_name) .. '</name>')
+        table.insert(xml_parts, '    <type>container_instance</type>')
+        table.insert(xml_parts, '    <book_type>' .. escape_xml(book.type) .. '</book_type>')
+        table.insert(xml_parts, '    <title>' .. escape_xml(book.title) .. '</title>')
+        table.insert(xml_parts, '    <author>' .. escape_xml(book.author) .. '</author>')
+        table.insert(xml_parts, '    <description>' .. escape_xml(book.description) .. '</description>')
+        table.insert(xml_parts, '    <text>' .. escape_xml(book.text) .. '</text>')
+        table.insert(xml_parts, '    <pages>' .. book.pages .. '</pages>')
+        table.insert(xml_parts, '    <location>' .. escape_xml(book.location) .. '</location>')
+        table.insert(xml_parts, '    <source>container</source>')
+        table.insert(xml_parts, '    <container_type>' .. escape_xml(book.container_type) .. '</container_type>')
+        if book.coordinates then
+            table.insert(xml_parts, '    <coordinates>')
+            table.insert(xml_parts, '      <x>' .. book.coordinates.x .. '</x>')
+            table.insert(xml_parts, '      <y>' .. book.coordinates.y .. '</y>')
+            table.insert(xml_parts, '      <z>' .. book.coordinates.z .. '</z>')
+            table.insert(xml_parts, '    </coordinates>')
         end
-        
-        table.insert(xml_parts, '  </book>')
-    end
-    
-    -- Process book node definitions
-    for _, node in ipairs(book_nodes) do
-        local content = extract_book_content(node.name, node)
-        
-        table.insert(xml_parts, '  <book>')
-        table.insert(xml_parts, '    <name>' .. escape_xml(node.name) .. '</name>')
-        table.insert(xml_parts, '    <type>node_definition</type>')
-        table.insert(xml_parts, '    <book_type>' .. escape_xml(content.type) .. '</book_type>')
-        table.insert(xml_parts, '    <title>' .. escape_xml(content.title) .. '</title>')
-        table.insert(xml_parts, '    <author>' .. escape_xml(content.author) .. '</author>')
-        table.insert(xml_parts, '    <description>' .. escape_xml(content.description) .. '</description>')
-        table.insert(xml_parts, '    <text><![CDATA[' .. content.text .. ']]></text>')
-        table.insert(xml_parts, '    <pages>' .. content.pages .. '</pages>')
-        table.insert(xml_parts, '    <source>definition</source>')
-        
-        -- Add groups information
-        if next(node.groups) then
-            table.insert(xml_parts, '    <groups>')
-            for group_name, group_value in pairs(node.groups) do
-                table.insert(xml_parts, '      <group name="' .. escape_xml(group_name) .. '">' .. group_value .. '</group>')
-            end
-            table.insert(xml_parts, '    </groups>')
-        end
-        
         table.insert(xml_parts, '  </book>')
     end
     
@@ -423,17 +562,20 @@ function readbooks.get_book_stats()
     local book_nodes = get_book_nodes()
     local world_books = scan_world_books()
     local inventory_books = scan_player_inventories()
+    local container_books = scan_containers()
     
     local stats = {
         total_definitions = #book_items + #book_nodes,
         total_world_books = #world_books,
         total_inventory_books = #inventory_books,
-        total_real_books = #world_books + #inventory_books,
-        total_books = #book_items + #book_nodes + #world_books + #inventory_books,
+        total_container_books = #container_books,
+        total_real_books = #world_books + #inventory_books + #container_books,
+        total_books = #book_items + #book_nodes + #world_books + #inventory_books + #container_books,
         item_types = {},
         node_types = {},
         world_book_authors = {},
-        inventory_book_authors = {}
+        inventory_book_authors = {},
+        container_book_authors = {}
     }
     
     -- Count definition types
@@ -460,49 +602,140 @@ function readbooks.get_book_stats()
         end
     end
     
+    for _, book in ipairs(container_books) do
+        if book.author and book.author ~= "" then
+            stats.container_book_authors[book.author] = (stats.container_book_authors[book.author] or 0) + 1
+        end
+    end
+    
     return stats
+end
+
+-- Export books organized by author to separate XML files
+local function export_books_by_author()
+    -- Scan for all real books
+    local world_books = scan_world_books()
+    local inventory_books = scan_player_inventories()
+    local container_books = scan_containers()
+    
+    -- Combine all real books
+    local all_books = {}
+    for _, book in ipairs(world_books) do
+        table.insert(all_books, book)
+    end
+    for _, book in ipairs(inventory_books) do
+        table.insert(all_books, book)
+    end
+    for _, book in ipairs(container_books) do
+        table.insert(all_books, book)
+    end
+    
+    -- Organize books by author
+    local books_by_author = {}
+    for _, book in ipairs(all_books) do
+        local author = book.author or "Unknown"
+        if author == "" then author = "Unknown" end
+        
+        if not books_by_author[author] then
+            books_by_author[author] = {}
+        end
+        table.insert(books_by_author[author], book)
+    end
+    
+    -- Export each author's books to separate file
+    local exported_files = {}
+    local world_path = minetest.get_worldpath()
+    
+    for author, books in pairs(books_by_author) do
+        -- Create XML for this author
+        local xml_parts = {}
+        table.insert(xml_parts, '<?xml version="1.0" encoding="UTF-8"?>')
+        table.insert(xml_parts, '<books xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">')
+        table.insert(xml_parts, '  <metadata>')
+        table.insert(xml_parts, '    <export_date>' .. os.date("%Y-%m-%d %H:%M:%S") .. '</export_date>')
+        table.insert(xml_parts, '    <game_version>' .. minetest.get_version().string .. '</game_version>')
+        table.insert(xml_parts, '    <mod_name>botkopain</mod_name>')
+        table.insert(xml_parts, '    <author>' .. escape_xml(author) .. '</author>')
+        table.insert(xml_parts, '    <book_count>' .. #books .. '</book_count>')
+        table.insert(xml_parts, '  </metadata>')
+        
+        -- Add all books by this author
+        for _, book in ipairs(books) do
+            table.insert(xml_parts, '  <book>')
+            table.insert(xml_parts, '    <name>' .. escape_xml(book.node_name) .. '</name>')
+            table.insert(xml_parts, '    <type>' .. escape_xml(book.type) .. '</type>')
+            table.insert(xml_parts, '    <title>' .. escape_xml(book.title) .. '</title>')
+            table.insert(xml_parts, '    <author>' .. escape_xml(book.author) .. '</author>')
+            table.insert(xml_parts, '    <description>' .. escape_xml(book.description) .. '</description>')
+            table.insert(xml_parts, '    <text>' .. escape_xml(book.text) .. '</text>')
+            table.insert(xml_parts, '    <pages>' .. book.pages .. '</pages>')
+            table.insert(xml_parts, '    <location>' .. escape_xml(book.location) .. '</location>')
+            table.insert(xml_parts, '    <source>' .. escape_xml(book.source) .. '</source>')
+            
+            if book.container_type then
+                table.insert(xml_parts, '    <container_type>' .. escape_xml(book.container_type) .. '</container_type>')
+            end
+            
+            if book.coordinates then
+                table.insert(xml_parts, '    <coordinates>')
+                if book.coordinates.x then
+                    table.insert(xml_parts, '      <x>' .. book.coordinates.x .. '</x>')
+                    table.insert(xml_parts, '      <y>' .. book.coordinates.y .. '</y>')
+                    table.insert(xml_parts, '      <z>' .. book.coordinates.z .. '</z>')
+                else
+                    for key, value in pairs(book.coordinates) do
+                        table.insert(xml_parts, '      <' .. key .. '>' .. escape_xml(tostring(value)) .. '</' .. key .. '>')
+                    end
+                end
+                table.insert(xml_parts, '    </coordinates>')
+            end
+            table.insert(xml_parts, '  </book>')
+        end
+        
+        table.insert(xml_parts, '</books>')
+        
+        local xml_content = table.concat(xml_parts, "\n")
+        
+        -- Sanitize author name for filename
+        local safe_author = author:gsub("[^%w%-_]", "_")
+        local file_path = world_path .. "/books_" .. safe_author .. ".xml"
+        
+        -- Try to write file
+        local file = io.open(file_path, "w")
+        if file then
+            file:write(xml_content)
+            file:close()
+            table.insert(exported_files, {author = author, file = file_path, count = #books})
+        else
+            minetest.log("warning", "[BotKopain] Could not write file for author: " .. author)
+        end
+    end
+    
+    return exported_files
 end
 
 -- Main function to export books to XML file
 function readbooks.export_books_to_xml()
-    local xml_content = generate_books_xml()
+    -- First, export by author to separate files
+    local exported_files = export_books_by_author()
     
-    -- Try to write to world directory first
-    local file_path = minetest.get_worldpath() .. "/books.xml"
-    local file, err = io.open(file_path, "w")
-    
-    if not file then
-        -- If file writing fails (due to security), use mod storage as fallback
-        minetest.log("warning", "[BotKopain] File writing blocked by security, using mod storage fallback")
-        
-        -- Store in mod storage
-        local storage = minetest.get_mod_storage()
-        storage:set_string("books_xml", xml_content)
-        storage:set_string("export_date", os.date("%Y-%m-%d %H:%M:%S"))
-        
-        -- Count books exported (including real instances)
-        local book_items = get_book_items()
-        local book_nodes = get_book_nodes()
-        local world_books = scan_world_books()
-        local inventory_books = scan_player_inventories()
-        local total_books = #book_items + #book_nodes + #world_books + #inventory_books
-        
-        minetest.log("action", "[BotKopain] Stored " .. total_books .. " books in mod storage")
-        return true, "Stored " .. total_books .. " books in mod storage (file access blocked by security)"
+    if #exported_files == 0 then
+        return false, "No books with content found to export"
     end
     
-    file:write(xml_content)
-    file:close()
+    -- Create summary
+    local total_books = 0
+    for _, file_info in ipairs(exported_files) do
+        total_books = total_books + file_info.count
+    end
     
-    -- Count books exported (including real instances)
-    local book_items = get_book_items()
-    local book_nodes = get_book_nodes()
-    local world_books = scan_world_books()
-    local inventory_books = scan_player_inventories()
-    local total_books = #book_items + #book_nodes + #world_books + #inventory_books
+    local message = "Exported " .. total_books .. " books by " .. #exported_files .. " authors:"
+    for _, file_info in ipairs(exported_files) do
+        message = message .. "\n  " .. file_info.author .. " (" .. file_info.count .. " books) -> " .. file_info.file
+    end
     
-    minetest.log("action", "[BotKopain] Exported " .. total_books .. " books to " .. file_path)
-    return true, "Exported " .. total_books .. " books to " .. file_path
+    minetest.log("action", "[BotKopain] " .. message)
+    return true, message
 end
 
 return readbooks
