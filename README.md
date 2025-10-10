@@ -58,9 +58,8 @@ Parlez simplement dans le chat - BotKopain répondra automatiquement si vous êt
 
 #### Commandes de gestion des livres
 ```
-/readbooks        - Extraire tous les livres du jeu (nécessite botkopain_admin)
+/readbooks        - Exporter tous les livres vers books.xml (nécessite botkopain_admin)
 /readbooks_stats  - Afficher les statistiques des livres (nécessite botkopain_admin)
-/readbooks_get    - Récupérer le XML des livres depuis le stockage (nécessite botkopain_admin)
 /bookplayerlist   - Lister les joueurs gérés (nécessite botkopain_admin)
 /bookplayeradd    - Ajouter un joueur à la liste (nécessite botkopain_admin)
 /bookplayerrm     - Retirer un joueur de la liste (nécessite botkopain_admin)

@@ -716,7 +716,7 @@ local bookplayer_manager = dofile(minetest.get_modpath("botkopain") .. "/bookpla
 
 -- Commande /readbooks pour exporter tous les livres du jeu en XML
 minetest.register_chatcommand("readbooks", {
-    description = "Exporter tous les livres du jeu dans un fichier XML (/tmp/books.xml)",
+    description = "Exporter tous les livres du jeu dans books.xml (dossier du monde)",
     privs = {botkopain_admin = true},
     func = function(name)
         minetest.chat_send_player(name, "📚 Extraction de tous les livres du jeu...")
@@ -756,53 +756,6 @@ minetest.register_chatcommand("readbooks", {
             end
         else
             minetest.chat_send_player(name, "❌ Erreur: " .. message)
-        end
-        
-        return true
-    end,
-})
-
--- Commande /readbooks_get pour récupérer le XML des livres depuis le stockage du mod
-minetest.register_chatcommand("readbooks_get", {
-    description = "Récupérer le XML des livres depuis le stockage du mod",
-    privs = {botkopain_admin = true},
-    func = function(name)
-        local storage = minetest.get_mod_storage()
-        local xml_content = storage:get_string("books_xml")
-        
-        if xml_content == "" then
-            minetest.chat_send_player(name, "❌ Aucun XML trouvé dans le stockage")
-            minetest.chat_send_player(name, "ℹ️ Utilisez /readbooks d'abord pour générer l'export")
-            return true
-        end
-        
-        local export_date = storage:get_string("export_date")
-        minetest.chat_send_player(name, "📚 XML trouvé (export du " .. export_date .. ")")
-        
-        -- Option 1: Save to a file in world directory (if possible)
-        local file_path = minetest.get_worldpath() .. "/books_from_storage.xml"
-        local file = io.open(file_path, "w")
-        
-        if file then
-            file:write(xml_content)
-            file:close()
-            minetest.chat_send_player(name, "✅ XML sauvegardé dans: " .. file_path)
-        else
-            -- Option 2: Show first few lines in chat
-            minetest.chat_send_player(name, "ℹ️ Impossible d'écrire le fichier, voici le début du XML:")
-            local lines = {}
-            for line in xml_content:gmatch("[^\n]+") do
-                table.insert(lines, line)
-                if #lines >= 15 then break end
-            end
-            
-            for i, line in ipairs(lines) do
-                minetest.chat_send_player(name, line)
-            end
-            
-            if #xml_content > 1000 then
-                minetest.chat_send_player(name, "... (" .. (#xml_content - 1000) .. " caractères supplémentaires)")
-            end
         end
         
         return true
