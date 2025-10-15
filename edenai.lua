@@ -68,11 +68,6 @@ local function load_history_from_storage(key)
     return {}
 end
 
--- Save history to mod_storage
-local function save_history_to_storage(key, data)
-    storage:set_string(key, minetest.write_json(data))
-end
-
 -- ConversationHistory class equivalent
 local ConversationHistory = {}
 ConversationHistory.__index = ConversationHistory
@@ -247,7 +242,7 @@ function ConversationHistory:save_to_storage()
         })
     end
     
-    save_history_to_storage(storage_key, data_to_save)
+    edenai.save_history_to_storage(storage_key, data_to_save)
 end
 
 function ConversationHistory:get_history()
@@ -311,6 +306,10 @@ local function save_history_to_storage(key, data)
     storage:set_string(key, minetest.write_json(data))
 end
 
+-- Make the functions accessible from methods
+edenai.load_history_from_storage = load_history_from_storage
+edenai.save_history_to_storage = save_history_to_storage
+
 -- Get or create conversation history for a player
 function edenai.get_conversation_history(player_name)
     if not conversation_histories[player_name] then
@@ -344,33 +343,53 @@ function edenai.format_single_line(text)
     text = text:gsub("[\n\r]", " ")
     text = text:gsub("%s+", " ")
     text = text:trim()
-
-    -- Split into sentences
-    local sentences = {}
-    for sentence in text:gmatch("[^.!?]+[.!?]") do
-        table.insert(sentences, sentence:trim())
-    end
-
-    -- Limit to 4 sentences
-    if #sentences > 4 then
-        for i = 5, #sentences do
-            sentences[i] = nil
-        end
-    end
-
-    -- Forcer une seule ligne en remplaçant les retours à la ligne par des espaces
-    local result = table.concat(sentences, " ")
-
+    
+    -- For tool responses, we want to preserve all information
+    -- Just remove extra whitespace and ensure single line
+    local result = text
+    
     -- S'assurer qu'il n'y a vraiment aucun retour à la ligne
     result = result:gsub("[\n\r]", " ")
     result = result:gsub("  +", " ")  -- Éliminer les espaces multiples
     result = result:trim()
-
+    
     return result
 end
 
--- Main function to get chat response from EdenAI
-function edenai.get_chat_response(player_name, message, online_players)
+-- Function to handle tool calls
+function edenai.handle_tool_calls(tool_calls, tools_module)
+    if not tool_calls or #tool_calls == 0 then
+        debug_log("No tool calls to handle")
+        return nil
+    end
+    
+    debug_log("Handling " .. #tool_calls .. " tool calls")
+    local tool_results = {}
+    
+    for _, tool_call in ipairs(tool_calls) do
+        local function_name = tool_call["function"].name
+        local arguments = tool_call["function"].arguments or {}
+        
+        minetest.log("action", "[BotKopain] Calling tool: " .. function_name)
+        debug_log("Tool arguments: " .. minetest.write_json(arguments))
+        
+        -- Execute the tool
+        local result = tools_module.execute_tool(tool_call)
+        debug_log("Tool result: " .. tostring(result):sub(1, 100))
+        
+        table.insert(tool_results, {
+            tool_call_id = tool_call.id,
+            role = "tool",
+            name = function_name,
+            content = result
+        })
+    end
+    
+    return tool_results
+end
+
+-- Main function to get chat response from EdenAI with tool support
+function edenai.get_chat_response(player_name, message, online_players, tools_module)
     if not http_api then
         minetest.log("error", "[BotKopain] API HTTP non disponible - ajoutez 'secure.http_mods = botkopain' dans minetest.conf")
         return function(callback)
@@ -389,7 +408,7 @@ function edenai.get_chat_response(player_name, message, online_players)
     local history = edenai.get_conversation_history(player_name)
     local history_list = history:get_history()
 
-    -- Use the actual message parameter
+    -- Use the actual message parameter (keep it simple as in working version)
     local full_query = message
 
     -- Build URL
@@ -401,18 +420,39 @@ function edenai.get_chat_response(player_name, message, online_players)
         "Content-Type: application/json",
         "Accept: application/json"
     }
+    
+    -- Debug with masked credentials
+    debug_log("Authorization: Bearer " .. EDENAI_API_KEY:sub(1, 8) .. "..." .. EDENAI_API_KEY:sub(-4))
+    debug_log("Project ID: " .. EDENAI_PROJECT_ID:sub(1, 8) .. "..." .. EDENAI_PROJECT_ID:sub(-4))
 
-    -- Build simple JSON payload - avoid complex history for now
+    -- Build JSON payload with enhanced query for tool usage
+    local enhanced_query = full_query
+    
+    -- Add tool context if tools module is provided
+    if tools_module then
+        local tools = tools_module.get_tools()
+        if tools and #tools > 0 then
+            debug_log("Tools available: " .. tostring(#tools) .. " tools")
+            
+            -- Enhance query with tool awareness
+            enhanced_query = enhanced_query .. "\n\n[SYSTEM: You have access to tools for searching player death coordinates. If asked about player deaths, coordinates, or bones, respond with TOOL_CALL:function_name(arguments) format, then I'll provide the results for your natural response.]"
+        end
+    end
+    
     local payload = {
-        query = full_query,
+        query = enhanced_query,
         llm_provider = "mistral",
-        llm_model = "mistral-small-latest",
+        llm_model = "mistral-small-latest",  -- This is the working model
         k = 5,
         max_tokens = 250,
         min_score = 0.4,
         temperature = 0.2,
         history = {}
     }
+    
+    -- CRITICAL DEBUG: Log the exact payload being sent
+    minetest.log("action", "[BotKopain CRITICAL] Payload model: " .. payload.llm_model)
+    minetest.log("action", "[BotKopain CRITICAL] Payload provider: " .. payload.llm_provider)
     
     -- Only add simple history if present and valid
     if #history_list > 0 then
@@ -443,9 +483,9 @@ function edenai.get_chat_response(player_name, message, online_players)
 
     -- Build JSON manually to avoid minetest.write_json issues with empty arrays
     local json_parts = {}
-    table.insert(json_parts, '"query":"' .. escape_json_string(full_query) .. '"')
+    table.insert(json_parts, '"query":"' .. escape_json_string(enhanced_query) .. '"')
     table.insert(json_parts, '"llm_provider":"mistral"')
-    table.insert(json_parts, '"llm_model":"mistral-small-latest"')
+    table.insert(json_parts, '"llm_model":"mistral-small-latest"')  -- Fixed model name
     table.insert(json_parts, '"k":5')
     table.insert(json_parts, '"max_tokens":250')
     table.insert(json_parts, '"min_score":0.4')
@@ -460,6 +500,9 @@ function edenai.get_chat_response(player_name, message, online_players)
     end
     
     local json_data = "{" .. table.concat(json_parts, ",") .. "}"
+    
+    -- CRITICAL DEBUG: Log the exact JSON being sent
+    minetest.log("action", "[BotKopain CRITICAL] Full JSON being sent: " .. json_data)
 
     -- DEBUG CRITICAL : Vérifier que le nouveau code est chargé
     minetest.log("action", "[BotKopain CRITICAL] History payload type: " .. type(payload.history) .. " count: " .. tostring(#payload.history))
@@ -471,6 +514,11 @@ function edenai.get_chat_response(player_name, message, online_players)
         debug_log("Last history entry: " .. minetest.write_json(history_list[#history_list]))
     end
     debug_log("JSON Payload: " .. json_data)
+    
+    -- Debug essential information
+    debug_log("URL: " .. url)
+    debug_log("Model: mistral-small-latest")
+    debug_log("Tools module present: " .. tostring(tools_module ~= nil))
     
     -- Vérification finale du JSON
     if json_data:find('"history":null') then
@@ -487,33 +535,232 @@ function edenai.get_chat_response(player_name, message, online_players)
         method = "POST",
         data = json_data,
         extra_headers = extra_headers,  -- Format correct : array de strings
-        timeout = 10,
+        timeout = 10
     }, function(result)
         local final_response
 
         if result.succeeded and result.code == 200 then
             local response_data = minetest.parse_json(result.data)
             if response_data then
-                -- Extract response from EdenAI format
+                -- Debug response
+                debug_log("Response received from EdenAI")
+                
+                -- Check if the model wants to call tools - handle both response formats
+                debug_log("Response data: " .. minetest.write_json(response_data))
+                
+                -- Check for tool calls in different possible locations
+                local tool_calls = nil
+                if response_data.tool_calls and #response_data.tool_calls > 0 then
+                    tool_calls = response_data.tool_calls
+                elseif response_data.choices and response_data.choices[1] and response_data.choices[1].tool_calls and #response_data.choices[1].tool_calls > 0 then
+                    tool_calls = response_data.choices[1].tool_calls
+                end
+                
+                if tool_calls and tools_module and #tool_calls > 0 then
+                    minetest.log("action", "[BotKopain] Tool calls detected: " .. tostring(#tool_calls))
+                    
+                    -- Execute tool calls
+                    local tool_results = edenai.handle_tool_calls(tool_calls, tools_module)
+                    
+                    if tool_results and #tool_results > 0 then
+                        -- Build follow-up request with tool results
+                        local followup_payload = {
+                            query = full_query,
+                            llm_provider = "mistral",
+                            llm_model = "mistral-small-latest",
+                            k = 5,
+                            max_tokens = 250,
+                            min_score = 0.4,
+                            temperature = 0.2,
+                            history = payload.history,
+                            tool_results = tool_results
+                        }
+                        
+                        local followup_json = minetest.write_json(followup_payload)
+                        
+                        -- Make follow-up request
+                        http_api.fetch({
+                            url = url,
+                            method = "POST",
+                            data = followup_json,
+                            extra_headers = extra_headers,
+                            timeout = 10,
+                            extra_body = {preference = "cost"}  -- Match Python example
+                        }, function(followup_result)
+                            local final_response
+                            if followup_result and followup_result.succeeded and followup_result.code == 200 then
+                                local followup_data = minetest.parse_json(followup_result.data)
+                                if followup_data then
+                                    local assistant_message = followup_data.result or
+                                                            followup_data.answer or
+                                                            followup_data.response or
+                                                            "Réponse non disponible"
+                                    
+                                    local formatted_response = edenai.format_single_line(assistant_message)
+                                    formatted_response = formatted_response:gsub("[\n\r]", " ")
+                                    formatted_response = formatted_response:gsub("  +", " ")
+                                    formatted_response = formatted_response:trim()
+                                    
+                                    history:add_exchange(message, formatted_response, player_name)
+                                    edenai.add_public_exchange(message, formatted_response, player_name)
+                                    
+                                    debug_log("Réponse finale avec outils: " .. formatted_response:sub(1, 100) .. "...")
+                                    final_response = formatted_response
+                                else
+                                    final_response = "Erreur: Réponse invalide après appels d'outils"
+                                end
+                            else
+                                final_response = "Erreur lors de la requête de suivi avec outils"
+                            end
+                            
+-- Ensure callback is called even if there are errors
+                            if callback_function then
+                                local success, err = pcall(callback_function, final_response)
+                                if not success then
+                                    minetest.log("error", "[BotKopain] Error calling callback: " .. tostring(err))
+                                end
+                            end
+                        end)
+                        
+                        return  -- Early return, callback will be called from nested request
+                    end
+                end
+                
+                -- Regular response (no tool calls detected in API format)
                 local assistant_message = response_data.result or
                                         response_data.answer or
                                         response_data.response or
                                         "Réponse non disponible"
+                
+                minetest.log("action", "[BotKopain] Original assistant message: " .. tostring(assistant_message))
 
-                -- Format response and ensure NO line breaks
+                -- Simple tool detection for prompt-based approach
+                if tools_module then
+                    minetest.log("action", "[BotKopain] Checking for tool usage - message: " .. tostring(message) .. ", response: " .. tostring(assistant_message))
+                    
+                    -- Simple heuristic: if response mentions searching and the original question was about deaths
+                    local original_lower = message:lower()
+                    local response_lower = assistant_message:lower()
+                    
+                    -- Check if original question was about death/mort/bones/etc.
+                    local is_death_question = original_lower:find("mort") or original_lower:find("mourir") or 
+                                            original_lower:find("death") or original_lower:find("die") or
+                                            original_lower:find("bones") or original_lower:find("coord")
+                    
+                    minetest.log("action", "[BotKopain] Death question detected: " .. tostring(is_death_question))
+                    
+                    -- Check if response indicates it wants to search
+                    local wants_to_search = response_lower:find("search") or response_lower:find("find") or
+                                          response_lower:find("recherche") or response_lower:find("cherche")
+                    
+                    minetest.log("action", "[BotKopain] Wants to search: " .. tostring(wants_to_search))
+                    
+                    if is_death_question then
+                        -- Extract player name more carefully from French text
+                        local target_player = nil
+                        
+                        -- Try to find a player name in the original message
+                        -- Remove common French words and extract the likely player name
+                        local words = {}
+                        for word in message:gmatch("[%w_]+") do
+                            table.insert(words, word)
+                        end
+                        
+                        -- Look for words that could be player names (not common French words or greetings)
+                        local common_words = {
+                            ["où"] = true, ["ou"] = true, ["est"] = true, ["mort"] = true, 
+                            ["le"] = true, ["la"] = true, ["de"] = true, ["il"] = true,
+                            ["salut"] = true, ["bonjour"] = true, ["bonsoir"] = true,
+                            ["kopain"] = true, ["botkopain"] = true, ["bk"] = true
+                        }
+                        
+                        -- First, try to find a word that's likely a player name
+                        -- (appears after "mort" or is capitalized and not a greeting)
+                        local found_death_keyword = false
+                        for _, word in ipairs(words) do
+                            local lower_word = word:lower()
+                            
+                            -- Track if we've seen death-related keywords
+                            if lower_word == "mort" or lower_word == "morts" or lower_word == "bones" then
+                                found_death_keyword = true
+                            end
+                            
+                            -- Skip common words and greetings
+                            if not common_words[lower_word] and #word > 1 then
+                                -- If we've seen death keywords, the next word is likely the player name
+                                if found_death_keyword then
+                                    target_player = word
+                                    break
+                                end
+                                
+                                -- Otherwise, prefer capitalized words (likely names)
+                                if word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") then
+                                    target_player = word
+                                    -- Don't break immediately - continue to see if there's a better candidate after "mort"
+                                end
+                            end
+                        end
+                        
+                        -- Fallback: if no target found and we have words, use the last viable candidate
+                        if not target_player then
+                            for _, word in ipairs(words) do
+                                local lower_word = word:lower()
+                                if not common_words[lower_word] and #word > 1 then
+                                    target_player = word
+                                end
+                            end
+                        end
+                        
+                        if target_player then
+                            minetest.log("action", "[BotKopain] Attempting tool call for player: " .. target_player)
+                            
+                            -- Execute tool with error handling
+                            local success, tool_result = pcall(tools_module.search_death_coordinates, target_player, nil, nil, nil, 3)
+                            
+                            minetest.log("action", "[BotKopain] Tool execution result - Success: " .. tostring(success) .. ", Result: " .. tostring(tool_result))
+                            
+                            if success and tool_result then
+                                -- Check if the result is an error message or no results
+                                if not tool_result:find("Error:") and tool_result ~= "Aucune coordonnée de mort trouvée." and tool_result ~= "No death coordinates found." and tool_result ~= "No bones locations found." then
+                                    -- Enhance the response with tool results in a user-friendly format
+                                    local formatted_results = tool_result:gsub("|", ", ")
+                                    assistant_message = target_player .. " a laissé des os à : " .. formatted_results
+                                    minetest.log("action", "[BotKopain] Appending tool results to response")
+                                else
+-- Handle no results case more gracefully
+                            if tool_result == "No bones locations found." or tool_result == "Aucune coordonnée de mort trouvée." or tool_result == "No death coordinates found." then
+                                assistant_message = "Je n'ai trouvé aucune coordonnée de mort pour " .. target_player .. "."
+                                minetest.log("action", "[BotKopain] No death coordinates found, setting no-results message")
+                            else
+                                minetest.log("warning", "[BotKopain] Tool returned error: " .. tostring(tool_result))
+                            end
+                                end
+                            elseif not success then
+                                minetest.log("error", "[BotKopain] Tool execution failed: " .. tostring(tool_result))
+                            end
+end
+                    end
+                end
+                
+minetest.log("action", "[BotKopain] Completed tool processing section")
+                
+-- Format response and ensure NO line breaks
+                minetest.log("action", "[BotKopain] Pre-formatting response: " .. tostring(assistant_message))
                 local formatted_response = edenai.format_single_line(assistant_message)
-
+                
                 -- Double protection : s'assurer qu'il n'y a vraiment aucun retour à la ligne
                 formatted_response = formatted_response:gsub("[\n\r]", " ")
                 formatted_response = formatted_response:gsub("  +", " ")
                 formatted_response = formatted_response:trim()
-
+                
+                minetest.log("action", "[BotKopain] Final formatted response: " .. tostring(formatted_response))
+                
                 -- Add to history
                 history:add_exchange(message, formatted_response, player_name)
                 
                 -- Also add to public history if it's a bk: call
                 edenai.add_public_exchange(message, formatted_response, player_name)
-
+                
                 debug_log("Réponse reçue d'EdenAI: " .. formatted_response:sub(1, 100) .. "...")
                 final_response = formatted_response
             else
@@ -537,7 +784,10 @@ function edenai.get_chat_response(player_name, message, online_players)
 
         -- Call the callback function if provided
         if callback_function then
-            callback_function(final_response)
+            local success, err = pcall(callback_function, final_response)
+            if not success then
+                minetest.log("error", "[BotKopain] Error calling callback: " .. tostring(err))
+            end
         end
     end)
 

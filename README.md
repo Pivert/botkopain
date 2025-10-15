@@ -1,8 +1,13 @@
 # BotKopain - Bot joueur francophone pour Luanti
 
-BotKopain est un bot joueur intelligent pour le serveur "Un Monde Merveilleux" de Luanti (ex-Minetest). Il utilise l'API EdenAI pour fournir des réponses contextuelles et intelligentes en français.
+BotKopain est un bot joueur intelligent pour le serveur "Un Monde Merveilleux" de Luanti (ex-Minetest). Il utilise l'API EdenAI pour fournir des réponses contextuelles et intelligentes en français, et inclut également un service de recherche des coordonnées de mort des joueurs.
 
 ## 🆕 Nouveautés
+
+**Version 2.1 - Service de recherche des coordonnées de mort**
+- ✅ Intégration d'un service Python pour rechercher les coordonnées de mort des joueurs
+- ✅ Utilisation de ripgrep pour des recherches efficaces dans les fichiers de log
+- ✅ API REST pour communiquer entre le mod Luanti et le service Python
 
 **Version 2.0 - Connexion directe EdenAI**
 - ✅ Suppression du gateway Python - connexion directe à EdenAI
@@ -23,6 +28,17 @@ botkopain_edenai_project_id = votre_project_id_edenai
 
 # Activation de l'API HTTP (obligatoire)
 secure.http_mods = botkopain
+```
+
+### 2. Service de recherche des coordonnées de mort
+Le service Python doit être démarré séparément:
+
+```bash
+# Installer les dépendances
+pip3 install -r requirements.txt
+
+# Démarrer le service
+./start_services.sh
 ```
 
 ### 2. Privilèges
@@ -91,6 +107,11 @@ Parlez simplement dans le chat - BotKopain répondra automatiquement si vous êt
 - **Comportement adaptatif** : S'adapte au style du joueur
 - **Connaissance du jeu** : Maîtrise les mods du serveur (TechAge, animalia, etc.)
 
+### Recherche des coordonnées de mort
+- **Recherche efficace** : Utilise ripgrep pour des recherches rapides dans les fichiers de log
+- **Filtres avancés** : Recherche par joueur, date, plage de dates
+- **Format standardisé** : Coordonnées retournées dans un format facile à utiliser
+
 ## 🔧 Installation
 
 1. Téléchargez le mod et placez-le dans le dossier `mods/` de votre serveur
@@ -102,10 +123,14 @@ Parlez simplement dans le chat - BotKopain répondra automatiquement si vous êt
 
 ```
 botkopain/
-├── init.lua          # Module principal
-├── edenai.lua        # Intégration EdenAI
-├── mod.conf          # Configuration du mod
-└── README.md         # Ce fichier
+├── init.lua                # Module principal
+├── edenai.lua              # Intégration EdenAI
+├── tools_http.lua          # Outils HTTP (recherche de coordonnées de mort)
+├── death_search_service.py # Service Python de recherche
+├── start_services.sh       # Script de démarrage du service
+├── requirements.txt        # Dépendances Python
+├── mod.conf                # Configuration du mod
+└── README.md               # Ce fichier
 ```
 
 ## 🚨 Dépannage
@@ -129,6 +154,12 @@ botkopain/
 - **API HTTP non disponible** : Voir guide ci-dessus
 - **Configuration EdenAI manquante** : Ajoutez vos clés dans minetest.conf
 - **Délai d'attente dépassé** : Vérifiez votre connexion internet
+
+### Service de recherche des coordonnées de mort
+- **Service non démarré** : Assurez-vous d'avoir exécuté `./start_services.sh`
+- **Port occupé** : Vérifiez si le port 5000 est déjà utilisé
+- **Fichier debug.txt manquant** : Le service nécessite un lien symbolique vers le fichier de log
+- **Permissions** : Vérifiez que le service a les droits de lecture sur le fichier debug.txt
 
 ## 📝 Notes techniques
 
