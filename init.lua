@@ -454,6 +454,7 @@ minetest.register_on_chat_message(function(name, message)
     init_public_session()
 
     -- Répondre uniquement aux salutations explicites (pas à la connexion) avec délai et limite temporelle
+    -- Mais permettre le traitement des messages composés qui contiennent à la fois une salutation et une question
     if is_greeting(message) then
         local current_time = os.time()
         local player_tracker = greeting_tracker[name] or {last_greeting = 0, count = 0}
@@ -461,21 +462,31 @@ minetest.register_on_chat_message(function(name, message)
         -- Vérifier si assez de temps s'est écoulé (2 heures = 7200 secondes)
         local time_since_last = current_time - player_tracker.last_greeting
 
-        if time_since_last >= 7200 then  -- 2 heures en secondes
-            -- Mettre à jour le tracker
-            greeting_tracker[name] = {
-                last_greeting = current_time,
-                count = player_tracker.count + 1
-            }
+        -- Si le message contient aussi une question de mort/os/bones, on traite quand même le message
+        local contains_death_question = message:lower():find("mort") or message:lower():find("os") or message:lower():find("bones")
+        
+        if time_since_last >= 7200 or contains_death_question then  -- 2 heures en secondes OU question de mort
+            -- Mettre à jour le tracker seulement si c'est vraiment une salutation pure
+            if not contains_death_question then
+                greeting_tracker[name] = {
+                    last_greeting = current_time,
+                    count = player_tracker.count + 1
+                }
 
-            minetest.log("action", "[BotKopain] Salutation pour " .. name .. " (dernière: " .. time_since_last .. "s ago, total: " .. greeting_tracker[name].count .. ")")
+                minetest.log("action", "[BotKopain] Salutation pour " .. name .. " (dernière: " .. time_since_last .. "s ago, total: " .. greeting_tracker[name].count .. ")")
 
-            local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
-            -- Attendre 3 secondes pour une réponse plus naturelle
-            minetest.after(3, function()
-                minetest.chat_send_all("<"..bot_name.."> "..greeting)
-            end)
-            return  -- Ne pas traiter davantage ce message
+                local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
+                -- Attendre 3 secondes pour une réponse plus naturelle
+                minetest.after(3, function()
+                    minetest.chat_send_all("<"..bot_name.."> "..greeting)
+                end)
+                
+                -- Si c'est seulement une salutation, ne pas traiter davantage ce message
+                if not contains_death_question then
+                    return
+                end
+                -- Si c'est une salutation + question, continuer le traitement
+            end
         else
             minetest.log("action", "[BotKopain] Salutation ignorée pour " .. name .. " (trop récente: " .. time_since_last .. "s < 7200s)")
         end

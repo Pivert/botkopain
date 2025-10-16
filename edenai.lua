@@ -408,8 +408,25 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
     local history = edenai.get_conversation_history(player_name)
     local history_list = history:get_history()
 
-    -- Use the actual message parameter (keep it simple as in working version)
+    -- Preprocess the message to enhance death-related queries
     local full_query = message
+    
+    -- If the message contains death-related keywords but isn't focused, emphasize the tool need
+    local death_keywords = {"mort", "morts", "bones", "os", "clamser", "décès", "death", "died"}
+    local contains_death_keyword = false
+    local lower_message = message:lower()
+    
+    for _, keyword in ipairs(death_keywords) do
+        if lower_message:find(keyword) then
+            contains_death_keyword = true
+            break
+        end
+    end
+    
+    -- If it's a compound message with death keywords, make it clearer that tools are needed
+    if contains_death_keyword and (lower_message:find("salut") or lower_message:find("bonjour") or lower_message:find("ca va") or lower_message:find("comment")) then
+        full_query = message .. "\n\n[FOCUS] Extract the death/bones question and use appropriate tools. Social pleasantries are secondary."
+    end
 
     -- Build URL
     local url = string.format(EDENAI_URL_TEMPLATE, EDENAI_PROJECT_ID)
@@ -434,8 +451,27 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
         if tools and #tools > 0 then
             debug_log("Tools available: " .. tostring(#tools) .. " tools")
             
-            -- Enhance query with tool awareness
-            enhanced_query = enhanced_query .. "\n\n[SYSTEM: You have access to tools for searching player death coordinates. If asked about player deaths, coordinates, or bones, respond with TOOL_CALL:function_name(arguments) format, then I'll provide the results for your natural response.]"
+            -- Build detailed tool information for the LLM
+            local tool_descriptions = {}
+            for _, tool in ipairs(tools) do
+                local func = tool["function"]
+                if func then
+                    local param_desc = ""
+                    if func.parameters and func.parameters.properties then
+                        local param_list = {}
+                        for param_name, param_info in pairs(func.parameters.properties) do
+                            table.insert(param_list, param_name .. " (" .. (param_info.type or "string") .. "): " .. (param_info.description or ""))
+                        end
+                        if #param_list > 0 then
+                            param_desc = "\nParameters:\n- " .. table.concat(param_list, "\n- ")
+                        end
+                    end
+                    table.insert(tool_descriptions, func.name .. ": " .. func.description .. param_desc)
+                end
+            end
+            
+            -- Enhance query with detailed tool awareness
+            enhanced_query = enhanced_query .. "\n\n[SYSTEM: You have access to the following tools for searching player death coordinates:\n" .. table.concat(tool_descriptions, "\n") .. "\n\nCRITICAL INSTRUCTIONS:\n1. ALWAYS use tools when asked about player deaths, coordinates, bones, or mortality\n2. ALWAYS respond with the EXACT format: TOOL_CALL:function_name(arguments) when tools are needed\n3. Extract player names from context if not explicitly provided\n4. For compound messages, FIRST address the tool requirement, THEN any social interaction\n5. Use the EXACT tool name from the list above\n6. Provide relevant arguments like username when available\n\nExamples:\n- Question: \"Salut, où est mort Thomazo ?\" → Response: \"TOOL_CALL:search_death_coordinates(username=\"Thomazo\")\"\n- Question: \"Où sont les os de Marie ?\" → Response: \"TOOL_CALL:search_death_coordinates(username=\"Marie\")\"]"
         end
     end
     
@@ -626,134 +662,215 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
                     end
                 end
                 
-                -- Regular response (no tool calls detected in API format)
+-- Regular response (no tool calls detected in API format)
                 local assistant_message = response_data.result or
                                         response_data.answer or
                                         response_data.response or
                                         "Réponse non disponible"
                 
                 minetest.log("action", "[BotKopain] Original assistant message: " .. tostring(assistant_message))
-
-                -- Simple tool detection for prompt-based approach
+                
+                -- Check for text-based tool calls (TOOL_CALL:function_name(arguments) format and plain function calls)
                 if tools_module then
-                    minetest.log("action", "[BotKopain] Checking for tool usage - message: " .. tostring(message) .. ", response: " .. tostring(assistant_message))
+                    local function_name, arguments_str = nil, nil
+                    local tool_detected = false
                     
-                    -- Simple heuristic: if response mentions searching and the original question was about deaths
-                    local original_lower = message:lower()
-                    local response_lower = assistant_message:lower()
-                    
-                    -- Check if original question was about death/mort/bones/etc.
-                    local is_death_question = original_lower:find("mort") or original_lower:find("mourir") or 
-                                            original_lower:find("death") or original_lower:find("die") or
-                                            original_lower:find("bones") or original_lower:find("coord")
-                    
-                    minetest.log("action", "[BotKopain] Death question detected: " .. tostring(is_death_question))
-                    
-                    -- Check if response indicates it wants to search
-                    local wants_to_search = response_lower:find("search") or response_lower:find("find") or
-                                          response_lower:find("recherche") or response_lower:find("cherche")
-                    
-                    minetest.log("action", "[BotKopain] Wants to search: " .. tostring(wants_to_search))
-                    
-                    if is_death_question then
-                        -- Extract player name more carefully from French text
-                        local target_player = nil
+-- Try various tool call patterns
+                    local tool_detected_patterns = {
+                        -- TOOL_CALL/TOOL_USE with arguments
+                        function()
+                            local _, fn, args = assistant_message:match("(TOOL_CALL|TOOL_USE):([%w_]+)%(([^)]*)%)")
+                            if fn then
+                                function_name, arguments_str = fn, args
+                                minetest.log("action", "[BotKopain] TOOL_CALL/TOOL_USE pattern with args detected: " .. function_name .. "(" .. (arguments_str or "") .. ")")
+                                return true
+                            end
+                            return false
+                        end,
                         
-                        -- Try to find a player name in the original message
-                        -- Remove common French words and extract the likely player name
-                        local words = {}
-                        for word in message:gmatch("[%w_]+") do
-                            table.insert(words, word)
+                        -- TOOL_CALL/TOOL_USE without arguments
+                        function()
+                            local _, fn = assistant_message:match("(TOOL_CALL|TOOL_USE):([%w_]+)")
+                            if fn then
+                                function_name = fn
+                                minetest.log("action", "[BotKopain] TOOL_CALL/TOOL_USE pattern without args detected: " .. function_name)
+                                arguments_str = nil
+                                return true
+                            end
+                            return false
+                        end,
+                        
+                        -- Plain function call with arguments
+                        function()
+                            local fn, args = assistant_message:match("([%w_]+)%((.*)%)")
+                            if fn and args then
+                                function_name, arguments_str = fn, args
+                                minetest.log("action", "[BotKopain] Plain function call detected: " .. function_name .. "(" .. arguments_str .. ")")
+                                return true
+                            end
+                            return false
+                        end,
+                        
+                        -- JSON format: function_name: {json}
+                        function()
+                            local fn, args = assistant_message:match("([%w_]+):%s*({.*})")
+                            if fn and args then
+                                function_name, arguments_str = fn, args
+                                minetest.log("action", "[BotKopain] JSON format detected: " .. function_name .. " with JSON args")
+                                return true
+                            end
+                            return false
+                        end,
+                        
+                        -- Bare function name
+                        function()
+                            local fn = assistant_message:match("^([%w_]+)$")
+                            if fn then
+                                function_name = fn
+                                minetest.log("action", "[BotKopain] Bare function name detected: " .. function_name)
+                                arguments_str = nil
+                                return true
+                            end
+                            return false
                         end
-                        
-                        -- Look for words that could be player names (not common French words or greetings)
-                        local common_words = {
-                            ["où"] = true, ["ou"] = true, ["est"] = true, ["mort"] = true, 
-                            ["le"] = true, ["la"] = true, ["de"] = true, ["il"] = true,
-                            ["salut"] = true, ["bonjour"] = true, ["bonsoir"] = true,
-                            ["kopain"] = true, ["botkopain"] = true, ["bk"] = true
+                    }
+                    
+                    -- Try each pattern until one matches
+                    for _, pattern_func in ipairs(tool_detected_patterns) do
+                        if pattern_func() then
+                            tool_detected = true
+                            break
+                        end
+                    end
+                    
+                    if tool_detected then
+                        -- Map common tool name variations to the correct tool name
+                        local tool_name_mapping = {
+                            ["find_player_death_coordinates"] = "search_death_coordinates",
+                            ["find_death_coordinates"] = "search_death_coordinates",
+                            ["search_player_death_coordinates"] = "search_death_coordinates",
+                            ["get_death_coordinates"] = "search_death_coordinates",
+                            ["find_player_bones"] = "search_death_coordinates",
+                            ["find_bones"] = "search_death_coordinates"
                         }
                         
-                        -- First, try to find a word that's likely a player name
-                        -- (appears after "mort" or is capitalized and not a greeting)
-                        local found_death_keyword = false
-                        for _, word in ipairs(words) do
-                            local lower_word = word:lower()
-                            
-                            -- Track if we've seen death-related keywords
-                            if lower_word == "mort" or lower_word == "morts" or lower_word == "bones" then
-                                found_death_keyword = true
-                            end
-                            
-                            -- Skip common words and greetings
-                            if not common_words[lower_word] and #word > 1 then
-                                -- If we've seen death keywords, the next word is likely the player name
-                                if found_death_keyword then
-                                    target_player = word
-                                    break
-                                end
-                                
-                                -- Otherwise, prefer capitalized words (likely names)
-                                if word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") then
-                                    target_player = word
-                                    -- Don't break immediately - continue to see if there's a better candidate after "mort"
-                                end
-                            end
-                        end
+                        local actual_function_name = tool_name_mapping[function_name] or function_name
                         
-                        -- Fallback: if no target found and we have words, use the last viable candidate
-                        if not target_player then
+                        -- Parse arguments more intelligently
+                        local arguments = {}
+                        
+                        if arguments_str and arguments_str ~= "" then
+                            -- Handle different argument formats
+                            if arguments_str:find("username=") then
+                                -- Named parameter format: username="Thomazo"
+                                local username = arguments_str:match('username=["\']([^"\']*)["\']')
+                                if username then
+                                    arguments.username = username
+                                end
+                            elseif arguments_str:sub(1,1) == "{" then
+                                -- JSON format: {"username": "Thomazo"}
+                                local success, json_args = pcall(minetest.parse_json, arguments_str)
+                                if success and json_args then
+                                    minetest.log("action", "[BotKopain] JSON arguments parsed successfully")
+                                    for k, v in pairs(json_args) do
+                                        arguments[k] = v
+                                    end
+                                else
+                                    minetest.log("warning", "[BotKopain] Failed to parse JSON arguments: " .. arguments_str)
+                                end
+                            else
+                                -- Simple string argument format
+                                local clean_arg = arguments_str:gsub("^['\"](.*)['\"]$", "%1")  -- Remove quotes
+                                if clean_arg ~= "" then
+                                    arguments.username = clean_arg
+                                end
+                            end
+                        else
+                            -- No arguments provided, try to extract username from original message
+                            -- Look for capitalized words that might be player names
+                            local words = {}
+                            for word in message:gmatch("[%a%d_]+") do
+                                local clean_word = word:gsub("^[%-%']*", ""):gsub("[%-%']*$", "")
+                                if clean_word ~= "" then
+                                    table.insert(words, clean_word)
+                                end
+                            end
+                            
+                            -- Look for capitalized words after death-related keywords
+                            local found_death_keyword = false
                             for _, word in ipairs(words) do
                                 local lower_word = word:lower()
-                                if not common_words[lower_word] and #word > 1 then
-                                    target_player = word
+                                
+                                if lower_word == "mort" or lower_word == "morts" or lower_word == "bones" or lower_word == "os" then
+                                    found_death_keyword = true
+                                elseif found_death_keyword and word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") and #word > 2 then
+                                    arguments.username = word
+                                    break
+                                end
+                            end
+                            
+                            -- Fallback: if no username found, try to find any capitalized word that's not a common word
+                            if not arguments.username then
+                                local common_words = {
+                                    ["où"] = true, ["ou"] = true, ["est"] = true, ["mort"] = true, 
+                                    ["le"] = true, ["la"] = true, ["de"] = true, ["il"] = true,
+                                    ["salut"] = true, ["bonjour"] = true, ["bonsoir"] = true,
+                                    ["kopain"] = true, ["botkopain"] = true, ["bk"] = true
+                                }
+                                
+                                for _, word in ipairs(words) do
+                                    local lower_word = word:lower()
+                                    if not common_words[lower_word] and #word > 2 and word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") then
+                                        arguments.username = word
+                                        break
+                                    end
                                 end
                             end
                         end
                         
-                        if target_player then
-                            minetest.log("action", "[BotKopain] Attempting tool call for player: " .. target_player)
+                        -- Set default limit if not provided
+                        if not arguments.limit then
+                            arguments.limit = 3
+                        end
+                        
+                        -- Create tool call structure compatible with handle_tool_calls
+                        local tool_call = {
+                            id = "text_tool_call_" .. os.time(),
+                            ["function"] = {
+                                name = actual_function_name,
+                                arguments = arguments
+                            }
+                        }
+                        
+                        -- Execute the tool call
+                        local tool_results = edenai.handle_tool_calls({tool_call}, tools_module)
+                        
+                        if tool_results and #tool_results > 0 then
+                            -- Get the tool result
+                            local tool_result = tool_results[1].content
                             
-                            -- Execute tool with error handling
-                            local success, tool_result = pcall(tools_module.search_death_coordinates, target_player, nil, nil, nil, 3)
-                            
-                            minetest.log("action", "[BotKopain] Tool execution result - Success: " .. tostring(success) .. ", Result: " .. tostring(tool_result))
-                            
-                            if success and tool_result then
-                                -- Check if the result is an error message or no results
-                                if not tool_result:find("Error:") and tool_result ~= "Aucune coordonnée de mort trouvée." and tool_result ~= "No death coordinates found." and tool_result ~= "No bones locations found." then
-                                    -- Enhance the response with tool results in a user-friendly format
-                                    local formatted_results = tool_result:gsub("|", ", ")
-                                    assistant_message = target_player .. " a laissé des os à : " .. formatted_results
-                                    minetest.log("action", "[BotKopain] Appending tool results to response")
-                                else
--- Handle no results case more gracefully
-                            if tool_result == "No bones locations found." or tool_result == "Aucune coordonnée de mort trouvée." or tool_result == "No death coordinates found." then
-                                assistant_message = "Je n'ai trouvé aucune coordonnée de mort pour " .. target_player .. "."
-                                minetest.log("action", "[BotKopain] No death coordinates found, setting no-results message")
+                            -- Format the result nicely
+                            if tool_result and not tool_result:find("Error:") and tool_result ~= "Aucune coordonnée de mort trouvée." and tool_result ~= "No death coordinates found." and tool_result ~= "No bones locations found." then
+                                -- Format tool results in user-friendly format
+                                local formatted_results = tool_result:gsub("|", ", ")
+                                assistant_message = arguments.username .. " a laissé des os à : " .. formatted_results
                             else
-                                minetest.log("warning", "[BotKopain] Tool returned error: " .. tostring(tool_result))
+                                -- Handle no results case
+                                assistant_message = "Je n'ai trouvé aucune coordonnée de mort pour " .. (arguments.username or "ce joueur") .. "."
                             end
-                                end
-                            elseif not success then
-                                minetest.log("error", "[BotKopain] Tool execution failed: " .. tostring(tool_result))
-                            end
-end
+                            
+                            minetest.log("action", "[BotKopain] Tool call executed, final response: " .. tostring(assistant_message))
+                        end
                     end
                 end
                 
-minetest.log("action", "[BotKopain] Completed tool processing section")
-                
 -- Format response and ensure NO line breaks
-                minetest.log("action", "[BotKopain] Pre-formatting response: " .. tostring(assistant_message))
                 local formatted_response = edenai.format_single_line(assistant_message)
                 
                 -- Double protection : s'assurer qu'il n'y a vraiment aucun retour à la ligne
                 formatted_response = formatted_response:gsub("[\n\r]", " ")
                 formatted_response = formatted_response:gsub("  +", " ")
                 formatted_response = formatted_response:trim()
-                
-                minetest.log("action", "[BotKopain] Final formatted response: " .. tostring(formatted_response))
                 
                 -- Add to history
                 history:add_exchange(message, formatted_response, player_name)
