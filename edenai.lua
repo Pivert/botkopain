@@ -354,10 +354,10 @@ function edenai.format_single_line(text)
     result = result:trim()
     
     -- Special handling for system messages that are too long
-    -- Limit to reasonable length for chat messages (around 200 characters)
-    if #result > 200 then
+    -- Limit to reasonable length for chat messages (around 1000 characters)
+    if #result > 1000 then
         -- Try to truncate at sentence boundary
-        local truncated = result:sub(1, 200)
+        local truncated = result:sub(1, 1000)
         local last_period = truncated:find("%.[^%.]*$")
         if last_period then
             result = truncated:sub(1, last_period)
@@ -368,7 +368,7 @@ function edenai.format_single_line(text)
                 truncated:find(";[^;]*$") or 0,
                 truncated:find(" [^ ]*$") or 0
             )
-            if last_break > 150 then  -- Only break if we have substantial content
+            if last_break > 750 then  -- Only break if we have substantial content
                 result = truncated:sub(1, last_break)
             else
                 result = truncated .. "..."
