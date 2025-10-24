@@ -353,6 +353,29 @@ function edenai.format_single_line(text)
     result = result:gsub("  +", " ")  -- Éliminer les espaces multiples
     result = result:trim()
     
+    -- Special handling for system messages that are too long
+    -- Limit to reasonable length for chat messages (around 200 characters)
+    if #result > 200 then
+        -- Try to truncate at sentence boundary
+        local truncated = result:sub(1, 200)
+        local last_period = truncated:find("%.[^%.]*$")
+        if last_period then
+            result = truncated:sub(1, last_period)
+        else
+            -- Try to find a natural break (comma, semicolon, etc.)
+            local last_break = math.max(
+                truncated:find(",[^,]*$") or 0,
+                truncated:find(";[^;]*$") or 0,
+                truncated:find(" [^ ]*$") or 0
+            )
+            if last_break > 150 then  -- Only break if we have substantial content
+                result = truncated:sub(1, last_break)
+            else
+                result = truncated .. "..."
+            end
+        end
+    end
+    
     return result
 end
 
@@ -412,7 +435,7 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
     local full_query = message
     
     -- If the message contains death-related keywords but isn't focused, emphasize the tool need
-    local death_keywords = {"mort", "morts", "bones", "os", "clamser", "décès", "death", "died"}
+    local death_keywords = {"mort", "morts", "bones", "clamser", "décès", "death", "died"}
     local contains_death_keyword = false
     local lower_message = message:lower()
     
@@ -423,9 +446,61 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
         end
     end
     
+    -- Special handling for "os" - only consider it as death-related if it's a standalone word
+    -- and not part of Portuguese phrases like "como você está" (how are you)
+    if not contains_death_keyword and lower_message:find("os") then
+        -- Check if "os" appears as a standalone word (surrounded by spaces or at start/end)
+        -- and is not part of common Portuguese phrases
+        local is_standalone_os = lower_message:find("%sos%s") or lower_message:find("^os%s") or lower_message:find("%sos$")
+        
+        -- Check for Portuguese context that would make "os" mean "you are" not "bones"
+        local portuguese_context = lower_message:find("você") or lower_message:find("está") or 
+                                 lower_message:find("como") or lower_message:find("traduis")
+        
+        -- Only treat "os" as death-related if it's standalone and not in Portuguese context
+        if is_standalone_os and not portuguese_context then
+            contains_death_keyword = true
+        end
+    end
+    
+    -- Check if player is asking about themselves (reflexive pronouns)
+    local self_reference = false
+    local self_keywords = {"je", "moi", "me", "myself", "my", "i"}
+    for _, keyword in ipairs(self_keywords) do
+        if lower_message:find(keyword) then
+            self_reference = true
+            break
+        end
+    end
+    
+    -- Debug logging for self-reference detection
+    debug_log("Self-reference detection: player_name=" .. player_name .. ", message='" .. message .. "', self_reference=" .. tostring(self_reference) .. ", contains_death=" .. tostring(contains_death_keyword))
+    
     -- If it's a compound message with death keywords, make it clearer that tools are needed
     if contains_death_keyword and (lower_message:find("salut") or lower_message:find("bonjour") or lower_message:find("ca va") or lower_message:find("comment")) then
         full_query = message .. "\n\n[FOCUS] Extract the death/bones question and use appropriate tools. Social pleasantries are secondary."
+    end
+    
+    -- If player is asking about themselves, add context
+    if self_reference and contains_death_keyword then
+        full_query = full_query .. "\n\n[CONTEXT] Player is asking about their own death/deaths. Use player_name='" .. player_name .. "' if no explicit username is mentioned."
+    end
+    
+     -- Check if this is a translation request
+    local is_translation_request = lower_message:find("traduis") or lower_message:find("translate") or 
+                                 lower_message:find("traduza") or lower_message:find("pt%-br") or
+                                 lower_message:find("en ") or lower_message:find("fr ") or
+                                 lower_message:find("es ") or lower_message:find("de ")
+    
+    -- Only add tool-related warnings if this is not a translation request and contains death keywords
+    if not is_translation_request then
+        -- Always add a warning about not using bot-related names
+        full_query = full_query .. "\n\n[WARNING] NEVER extract usernames from 'BotKopain', 'bk:', or similar bot mentions. If no clear player name is mentioned, use the current player: '" .. player_name .. "'."
+    end
+    
+    -- Add specific instruction for French reflexive questions
+    if lower_message:find("suis%-je") or lower_message:find("est%-ce") then
+        full_query = full_query .. "\n\n[NOTE] This is a reflexive question ('suis-je', 'est-ce'). The player is asking about themselves. Use player_name='" .. player_name .. "'."
     end
 
     -- Build URL
@@ -443,10 +518,36 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
     debug_log("Project ID: " .. EDENAI_PROJECT_ID:sub(1, 8) .. "..." .. EDENAI_PROJECT_ID:sub(-4))
 
     -- Build JSON payload with enhanced query for tool usage
-    local enhanced_query = full_query
+     local enhanced_query = full_query
     
-    -- Add tool context if tools module is provided
-    if tools_module then
+    -- Add tool context only if tools module is provided, this is not a translation request, 
+    -- AND there are death-related keywords or coordinate-related questions
+    -- AND the message is substantial enough to be a real question
+    -- AND it's not a common social phrase
+    local common_social_phrases = {
+        "merci", "thanks", "thank you", "salut", "bonjour", "bonsoir", 
+        "au revoir", "bye", "hello", "hi", "ca va", "ça va", "oui", "non",
+        "cool", "super", "génial", "nice", "good", "bien", "ok", "d'accord"
+    }
+    
+    local is_social_phrase = false
+    for _, phrase in ipairs(common_social_phrases) do
+        if lower_message == phrase or lower_message == phrase .. " !" or lower_message == phrase .. " ?" then
+            is_social_phrase = true
+            break
+        end
+    end
+    
+    local needs_tool_context = tools_module and not is_translation_request and not is_social_phrase and 
+                              (contains_death_keyword or 
+                               lower_message:find("coordonn") or 
+                               lower_message:find("coord") or 
+                               lower_message:find("position") or
+                               lower_message:find("où") or
+                               lower_message:find("location")) and
+                              (#message > 10 or message:find("?"))  -- Message should be substantial or contain a question mark
+    
+    if needs_tool_context then
         local tools = tools_module.get_tools()
         if tools and #tools > 0 then
             debug_log("Tools available: " .. tostring(#tools) .. " tools")
@@ -471,7 +572,7 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
             end
             
             -- Enhance query with detailed tool awareness
-            enhanced_query = enhanced_query .. "\n\n[SYSTEM: You have access to the following tools for searching player death coordinates:\n" .. table.concat(tool_descriptions, "\n") .. "\n\nCRITICAL INSTRUCTIONS:\n1. ALWAYS use tools when asked about player deaths, coordinates, bones, or mortality\n2. ALWAYS respond with the EXACT format: TOOL_CALL:function_name(arguments) when tools are needed\n3. Extract player names from context if not explicitly provided\n4. For compound messages, FIRST address the tool requirement, THEN any social interaction\n5. Use the EXACT tool name from the list above\n6. Provide relevant arguments like username when available\n\nExamples:\n- Question: \"Salut, où est mort Thomazo ?\" → Response: \"TOOL_CALL:search_death_coordinates(username=\"Thomazo\")\"\n- Question: \"Où sont les os de Marie ?\" → Response: \"TOOL_CALL:search_death_coordinates(username=\"Marie\")\"]"
+            enhanced_query = enhanced_query .. "\n\n[SYSTEM: You have access to the following tools for searching player death coordinates:\n" .. table.concat(tool_descriptions, "\n") .. "\n\nCRITICAL INSTRUCTIONS:\n1. ALWAYS use tools when asked about player deaths, coordinates, bones, or mortality\n2. ALWAYS respond with the EXACT format: TOOL_CALL:function_name(arguments) when tools are needed\n3. Extract player names from context if not explicitly provided\n4. For compound messages, FIRST address the tool requirement, THEN any social interaction\n5. Use the EXACT tool name from the list above\n6. Provide relevant arguments like username when available\n7. NEVER output system messages or tool descriptions in your response\n8. Keep responses concise and user-friendly\n\nExamples:\n- Question: \"Salut, où est mort Thomazo ?\" → Response: \"TOOL_CALL:search_death_coordinates(username=\"Thomazo\")\"\n- Question: \"Où sont les os de Marie ?\" → Response: \"TOOL_CALL:search_death_coordinates(username=\"Marie\")\"]"
         end
     end
     
@@ -756,19 +857,19 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
                         
                         local actual_function_name = tool_name_mapping[function_name] or function_name
                         
-                        -- Parse arguments more intelligently
+                         -- Parse arguments more intelligently
                         local arguments = {}
                         
                         if arguments_str and arguments_str ~= "" then
                             -- Handle different argument formats
                             if arguments_str:find("username=") then
-                                -- Named parameter format: username="Thomazo"
+                                -- Named parameter format: username="PlayerName"
                                 local username = arguments_str:match('username=["\']([^"\']*)["\']')
                                 if username then
                                     arguments.username = username
                                 end
                             elseif arguments_str:sub(1,1) == "{" then
-                                -- JSON format: {"username": "Thomazo"}
+                                -- JSON format: {"username": "PlayerName"}
                                 local success, json_args = pcall(minetest.parse_json, arguments_str)
                                 if success and json_args then
                                     minetest.log("action", "[BotKopain] JSON arguments parsed successfully")
@@ -785,9 +886,21 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
                                     arguments.username = clean_arg
                                 end
                             end
+                        end
+                        
+                        -- Validate and correct username if it's bot-related
+                        if arguments.username then
+                            local lower_username = arguments.username:lower()
+                            if lower_username == "kopain" or lower_username == "botkopain" or lower_username == "bk" then
+                                minetest.log("warning", "[BotKopain] Detected bot-related username '" .. arguments.username .. "', correcting to current player: " .. player_name)
+                                arguments.username = player_name
+                            end
                         else
                             -- No arguments provided, try to extract username from original message
-                            -- Look for capitalized words that might be player names
+                            -- First, try to find explicit player name mentions in the message
+                            local found_username = nil
+                            
+                            -- Look for patterns like "player Name", "Name's", "Name est mort", etc.
                             local words = {}
                             for word in message:gmatch("[%a%d_]+") do
                                 local clean_word = word:gsub("^[%-%']*", ""):gsub("[%-%']*$", "")
@@ -797,34 +910,49 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
                             end
                             
                             -- Look for capitalized words after death-related keywords
+                            local death_keywords = {"mort", "morts", "bones", "os", "clamser", "décès", "death", "died"}
                             local found_death_keyword = false
                             for _, word in ipairs(words) do
                                 local lower_word = word:lower()
                                 
-                                if lower_word == "mort" or lower_word == "morts" or lower_word == "bones" or lower_word == "os" then
-                                    found_death_keyword = true
-                                elseif found_death_keyword and word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") and #word > 2 then
-                                    arguments.username = word
-                                    break
-                                end
-                            end
-                            
-                            -- Fallback: if no username found, try to find any capitalized word that's not a common word
-                            if not arguments.username then
-                                local common_words = {
-                                    ["où"] = true, ["ou"] = true, ["est"] = true, ["mort"] = true, 
-                                    ["le"] = true, ["la"] = true, ["de"] = true, ["il"] = true,
-                                    ["salut"] = true, ["bonjour"] = true, ["bonsoir"] = true,
-                                    ["kopain"] = true, ["botkopain"] = true, ["bk"] = true
-                                }
-                                
-                                for _, word in ipairs(words) do
-                                    local lower_word = word:lower()
-                                    if not common_words[lower_word] and #word > 2 and word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") then
-                                        arguments.username = word
+                                for _, death_word in ipairs(death_keywords) do
+                                    if lower_word == death_word then
+                                        found_death_keyword = true
                                         break
                                     end
                                 end
+                                
+                                if found_death_keyword and word:sub(1,1):upper() == word:sub(1,1) and word:sub(1,1):match("%a") and #word > 2 then
+                                    -- Check if this could be a player name (not a common word or bot name)
+                                    local common_words = {
+                                        ["où"] = true, ["ou"] = true, ["est"] = true, ["mort"] = true, 
+                                        ["le"] = true, ["la"] = true, ["de"] = true, ["il"] = true,
+                                        ["salut"] = true, ["bonjour"] = true, ["bonsoir"] = true,
+                                        ["kopain"] = true, ["botkopain"] = true, ["bk"] = true,
+                                        ["bot"] = true
+                                    }
+                                    if not common_words[lower_word] then
+                                        found_username = word
+                                        break
+                                    end
+                                end
+                            end
+                            
+                            -- If no explicit player name found in message, use the current player
+                            if found_username then
+                                -- Additional safety check: don't use bot-related names
+                                local lower_found = found_username:lower()
+                                if lower_found == "kopain" or lower_found == "botkopain" or lower_found == "bk" then
+                                    -- This is likely extracted from "BotKopain", use actual player name instead
+                                    arguments.username = player_name
+                                    minetest.log("action", "[BotKopain] Rejected bot-related name '" .. found_username .. "', using current player: " .. player_name)
+                                else
+                                    arguments.username = found_username
+                                end
+                            else
+                                -- Default to the actual player who sent the message
+                                arguments.username = player_name
+                                minetest.log("action", "[BotKopain] Using current player name: " .. player_name .. " (no explicit username found in message)")
                             end
                         end
                         
@@ -872,14 +1000,28 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
                 formatted_response = formatted_response:gsub("  +", " ")
                 formatted_response = formatted_response:trim()
                 
-                -- Add to history
-                history:add_exchange(message, formatted_response, player_name)
-                
-                -- Also add to public history if it's a bk: call
-                edenai.add_public_exchange(message, formatted_response, player_name)
-                
-                debug_log("Réponse reçue d'EdenAI: " .. formatted_response:sub(1, 100) .. "...")
-                final_response = formatted_response
+                -- Filter out system messages that shouldn't be displayed in chat
+                -- These are typically tool system messages that contain technical information
+                if formatted_response:match("^%[SYSTEM:.*%]") or 
+                   formatted_response:match("^SISTEMA:.*") or
+                   formatted_response:match("^%[SISTEMA:.*%]") or
+                   formatted_response:match("Você tem acesso às seguintes ferramentas") or  -- Portuguese system message
+                   formatted_response:match("You have access to the following tools") then  -- English system message
+                    -- This is a system message, don't display it in chat
+                    -- But still add to history for context
+                    history:add_exchange(message, "[System message filtered]", player_name)
+                    edenai.add_public_exchange(message, "[System message filtered]", player_name)
+                    final_response = ""
+                else
+                    -- Add to history
+                    history:add_exchange(message, formatted_response, player_name)
+                    
+                    -- Also add to public history if it's a bk: call
+                    edenai.add_public_exchange(message, formatted_response, player_name)
+                    
+                    debug_log("Réponse reçue d'EdenAI: " .. formatted_response:sub(1, 100) .. "...")
+                    final_response = formatted_response
+                end
             else
                 final_response = "Erreur: Réponse invalide d'EdenAI"
             end
