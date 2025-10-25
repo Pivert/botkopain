@@ -48,7 +48,7 @@ local chat_history = {
     private = {}
 }
 
--- Suivi des salutations par joueur avec limite temporelle (4 heures)
+-- Suivi des salutations par joueur avec limite temporelle (24 heures)
 local greeting_tracker = {}
 
 -- Fonction pour obtenir la liste des joueurs connectés (nécessaire pour les fonctions suivantes)
@@ -459,13 +459,13 @@ minetest.register_on_chat_message(function(name, message)
         local current_time = os.time()
         local player_tracker = greeting_tracker[name] or {last_greeting = 0, count = 0}
 
-        -- Vérifier si assez de temps s'est écoulé (4 heures = 14400 secondes)
+        -- Vérifier si assez de temps s'est écoulé (24 heures = 86400 secondes)
         local time_since_last = current_time - player_tracker.last_greeting
 
         -- Si le message contient aussi une question de mort/os/bones, on traite quand même le message
         local contains_death_question = message:lower():find("mort") or message:lower():find("os") or message:lower():find("bones")
         
-        if time_since_last >= 14400 or contains_death_question then  -- 4 heures en secondes OU question de mort
+        if time_since_last >= 86400 or contains_death_question then  -- 24 heures en secondes OU question de mort
             -- Mettre à jour le tracker seulement si c'est vraiment une salutation pure
             if not contains_death_question then
                 greeting_tracker[name] = {
@@ -1082,7 +1082,7 @@ minetest.register_chatcommand("time", {
 })
 
 -- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
--- avec une limite de 4 heures entre chaque salutation par joueur
+-- avec une limite de 24 heures entre chaque salutation par joueur
 
 -- Gestion des changements de nombre de joueurs pour transitionner entre modes
 minetest.register_on_leaveplayer(function(player)
