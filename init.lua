@@ -148,9 +148,9 @@ local function generate_greeting(player_name, time_of_day)
     local hour = tonumber(os.date("%H")) or 12
     local greeting
 
-    if hour >= 2 and hour < 10 then
+    if hour >= 2 and hour < 12 then
         greeting = "Bonjour"
-    elseif hour >= 10 and hour < 16 then
+    elseif hour >= 12 and hour < 18 then
         greeting = "Bon après-midi"
     else
         greeting = "Bonsoir"
@@ -464,7 +464,7 @@ minetest.register_on_chat_message(function(name, message)
 
         -- Si le message contient aussi une question de mort/os/bones, on traite quand même le message
         local contains_death_question = message:lower():find("mort") or message:lower():find("os") or message:lower():find("bones")
-        
+
         if time_since_last >= 86400 or contains_death_question then  -- 24 heures en secondes OU question de mort
             -- Mettre à jour le tracker seulement si c'est vraiment une salutation pure
             if not contains_death_question then
@@ -480,7 +480,7 @@ minetest.register_on_chat_message(function(name, message)
                 minetest.after(3, function()
                     minetest.chat_send_all("<"..bot_name.."> "..greeting)
                 end)
-                
+
                 -- Si c'est seulement une salutation, ne pas traiter davantage ce message
                 if not contains_death_question then
                     return
@@ -668,16 +668,16 @@ minetest.register_chatcommand("bkdiag", {
     privs = {server = true},
     func = function(name)
         minetest.chat_send_player(name, "🔍 Diagnostic des outils BotKopain...")
-        
+
         -- Vérifier l'API HTTP
         if not http_api then
             minetest.chat_send_player(name, "❌ API HTTP non disponible")
             minetest.chat_send_player(name, "🔧 Ajoutez 'secure.http_mods = botkopain' dans minetest.conf")
             return true
         end
-        
+
         minetest.chat_send_player(name, "✅ API HTTP disponible")
-        
+
         -- Vérifier les outils
         if tools and tools.diagnose then
             local diag = tools.diagnose()
@@ -685,7 +685,7 @@ minetest.register_chatcommand("bkdiag", {
             minetest.chat_send_player(name, "  • Initialisé: " .. (diag.initialized and "OUI" or "NON"))
             minetest.chat_send_player(name, "  • Dernière erreur: " .. (diag.last_error or "AUCUNE"))
             minetest.chat_send_player(name, "  • Service URL: " .. diag.service_url)
-            
+
             -- Tester la connexion au service
             if tools.check_python_service then
                 local healthy = tools.check_python_service()
@@ -694,7 +694,7 @@ minetest.register_chatcommand("bkdiag", {
         else
             minetest.chat_send_player(name, "⚠️  Module d'outils non disponible")
         end
-        
+
         return true
     end,
 })
@@ -706,24 +706,24 @@ minetest.register_chatcommand("bktesttools", {
     privs = {server = true},
     func = function(name, param)
         minetest.chat_send_player(name, "🧪 Test des outils BotKopain...")
-        
+
         if not http_api then
             minetest.chat_send_player(name, "❌ API HTTP non disponible")
             return true
         end
-        
+
         local player_name = param ~= "" and param or "player"
-        
+
         -- Test direct tool call
         if tools and tools.search_death_coordinates then
             minetest.chat_send_player(name, "🔍 Test de recherche de coordonnées de mort pour: " .. player_name)
-            
+
             local result = tools.search_death_coordinates(player_name, nil, nil, nil, 3)
             minetest.chat_send_player(name, "📋 Résultat: " .. tostring(result))
         else
             minetest.chat_send_player(name, "❌ Fonction de recherche non disponible")
         end
-        
+
         return true
     end,
 })
@@ -738,24 +738,24 @@ minetest.register_chatcommand("bktestextract", {
             minetest.chat_send_player(name, "Usage: /bktestextract <message>")
             return true
         end
-        
+
         minetest.chat_send_player(name, "🔍 Test d'extraction de mots pour: " .. param)
-        
+
         -- Extract player name more carefully from French text
         local target_player = nil
-        
+
         -- Try to find a player name in the original message
         -- Remove common French words and extract the likely player name
         local words = {}
         for word in param:gmatch("[%w_]+") do
             table.insert(words, word)
         end
-        
+
         minetest.chat_send_player(name, "📝 Mots trouvés: " .. table.concat(words, ", "))
-        
+
         -- Look for words that could be player names (not common French words)
         local common_words = {["où"] = true, ["ou"] = true, ["est"] = true, ["mort"] = true, ["le"] = true, ["la"] = true, ["de"] = true, ["il"] = true}
-        
+
         for _, word in ipairs(words) do
             local lower_word = word:lower()
             if not common_words[lower_word] and #word > 1 then
@@ -763,13 +763,13 @@ minetest.register_chatcommand("bktestextract", {
                 break
             end
         end
-        
+
         if target_player then
             minetest.chat_send_player(name, "🎯 Joueur extrait: " .. target_player)
         else
             minetest.chat_send_player(name, "❌ Aucun joueur trouvé")
         end
-        
+
         return true
     end,
 })
@@ -845,7 +845,7 @@ minetest.register_chatcommand("readbooks", {
     privs = {botkopain_admin = true},
     func = function(name)
         minetest.chat_send_player(name, "📚 Extraction de tous les livres du jeu...")
-        
+
         -- Get book stats first
         local stats = readbooks.get_book_stats()
         minetest.chat_send_player(name, "📊 Statistiques des livres trouvés:")
@@ -854,7 +854,7 @@ minetest.register_chatcommand("readbooks", {
         minetest.chat_send_player(name, "  • Livres dans les inventaires: " .. stats.total_inventory_books)
         minetest.chat_send_player(name, "  • Livres dans les conteneurs: " .. stats.total_container_books)
         minetest.chat_send_player(name, "  • Total livres réels: " .. stats.total_real_books)
-        
+
         -- Show book types
         if next(stats.item_types) then
             minetest.chat_send_player(name, "  • Types d'items:")
@@ -862,18 +862,18 @@ minetest.register_chatcommand("readbooks", {
                 minetest.chat_send_player(name, "    - " .. book_type .. ": " .. count)
             end
         end
-        
+
         if next(stats.node_types) then
             minetest.chat_send_player(name, "  • Types de nodes:")
             for book_type, count in pairs(stats.node_types) do
                 minetest.chat_send_player(name, "    - " .. book_type .. ": " .. count)
             end
         end
-        
+
         -- Export books
         minetest.chat_send_player(name, "💾 Export vers books.xml dans le dossier du monde...")
         local success, message = readbooks.export_books_to_xml()
-        
+
         if success then
             minetest.chat_send_player(name, "✅ Export réussi:")
             for line in message:gmatch("[^\n]+") do
@@ -882,7 +882,7 @@ minetest.register_chatcommand("readbooks", {
         else
             minetest.chat_send_player(name, "❌ Erreur: " .. message)
         end
-        
+
         return true
     end,
 })
@@ -893,51 +893,51 @@ minetest.register_chatcommand("readbooks_stats", {
     privs = {botkopain_admin = true},
     func = function(name)
         local stats = readbooks.get_book_stats()
-        
+
         minetest.chat_send_player(name, "=== 📚 STATISTIQUES DES LIVRES ===")
         minetest.chat_send_player(name, "Définitions de livres: " .. stats.total_definitions)
         minetest.chat_send_player(name, "Livres réels dans le monde: " .. stats.total_world_books)
         minetest.chat_send_player(name, "Livres dans les inventaires: " .. stats.total_inventory_books)
         minetest.chat_send_player(name, "Livres dans les conteneurs: " .. stats.total_container_books)
         minetest.chat_send_player(name, "Total livres réels: " .. stats.total_real_books)
-        
+
         if next(stats.item_types) then
             minetest.chat_send_player(name, "Types d'items:")
             for book_type, count in pairs(stats.item_types) do
                 minetest.chat_send_player(name, "  • " .. book_type .. ": " .. count)
             end
         end
-        
+
         if next(stats.node_types) then
             minetest.chat_send_player(name, "Types de nodes:")
             for book_type, count in pairs(stats.node_types) do
                 minetest.chat_send_player(name, "  • " .. book_type .. ": " .. count)
             end
         end
-        
+
         if next(stats.world_book_authors) then
             minetest.chat_send_player(name, "Auteurs dans le monde:")
             for author, count in pairs(stats.world_book_authors) do
                 minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
             end
         end
-        
+
         if next(stats.inventory_book_authors) then
             minetest.chat_send_player(name, "Auteurs dans les inventaires:")
             for author, count in pairs(stats.inventory_book_authors) do
                 minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
             end
         end
-        
+
         if next(stats.container_book_authors) then
             minetest.chat_send_player(name, "Auteurs dans les conteneurs:")
             for author, count in pairs(stats.container_book_authors) do
                 minetest.chat_send_player(name, "  • " .. author .. ": " .. count .. " livre(s)")
             end
         end
-        
+
         minetest.chat_send_player(name, "ℹ️ Utilisez /readbooks pour exporter vers XML")
-        
+
         return true
     end,
 })
@@ -948,17 +948,17 @@ minetest.register_chatcommand("bookplayerlist", {
     privs = {botkopain_admin = true},
     func = function(name)
         local players = bookplayer_manager.get_managed_players()
-        
+
         if #players == 0 then
             minetest.chat_send_player(name, "ℹ️ Aucun joueur dans la liste - tous les livres seront extraits")
             return true
         end
-        
+
         minetest.chat_send_player(name, "=== 📚 JOUEURS GÉRÉS ===")
         for i, player_name in ipairs(players) do
             minetest.chat_send_player(name, i .. ". " .. player_name)
         end
-        
+
         return true
     end,
 })
@@ -972,10 +972,10 @@ minetest.register_chatcommand("bookplayeradd", {
         if param == "" then
             return false, "Usage: /bookplayeradd <nom_du_joueur>"
         end
-        
+
         local success, message = bookplayer_manager.add_player(param)
         minetest.chat_send_player(name, message)
-        
+
         return success
     end,
 })
@@ -989,10 +989,10 @@ minetest.register_chatcommand("bookplayerrm", {
         if param == "" then
             return false, "Usage: /bookplayerrm <nom_du_joueur>"
         end
-        
+
         local success, message = bookplayer_manager.remove_player(param)
         minetest.chat_send_player(name, message)
-        
+
         return success
     end,
 })
@@ -1007,18 +1007,18 @@ minetest.register_chatcommand("deaths", {
         for part in param:gmatch("%S+") do
             table.insert(parts, part)
         end
-        
+
         local username = parts[1]
         local limit = tonumber(parts[2]) or 3
-        
+
         if not username then
             return false, "Usage: /deaths <player_name> [limit]"
         end
-        
+
         minetest.chat_send_player(name, "🔍 Recherche des morts de " .. username .. "...")
-        
+
         local result = tools.search_death_coordinates(username, nil, nil, nil, limit)
-        
+
         if result and result ~= "No death coordinates found." then
             minetest.chat_send_player(name, "💀 Coordonnées de mort pour " .. username .. ":")
             -- Split results by | and send each one
@@ -1028,7 +1028,7 @@ minetest.register_chatcommand("deaths", {
         else
             minetest.chat_send_player(name, "ℹ️ Aucune mort trouvée pour " .. username)
         end
-        
+
         return true
     end,
 })
@@ -1043,19 +1043,19 @@ minetest.register_chatcommand("deaths_time", {
         for part in param:gmatch("%S+") do
             table.insert(parts, part)
         end
-        
+
         local start_date = parts[1]
         local end_date = parts[2]
         local limit = tonumber(parts[3]) or 5
-        
+
         if not start_date then
             return false, "Usage: /deaths_time <start_date> [end_date] [limit]"
         end
-        
+
         minetest.chat_send_player(name, "🔍 Recherche des morts du " .. start_date .. (end_date and " au " .. end_date or "") .. "...")
-        
+
         local result = tools.search_death_coordinates(nil, start_date, end_date, nil, limit)
-        
+
         if result and result ~= "No death coordinates found." then
             minetest.chat_send_player(name, "💀 Morts trouvées:")
             -- Split results by | and send each one
@@ -1065,7 +1065,7 @@ minetest.register_chatcommand("deaths_time", {
         else
             minetest.chat_send_player(name, "ℹ️ Aucune mort trouvée dans cette période")
         end
-        
+
         return true
     end,
 })
@@ -1093,7 +1093,7 @@ minetest.register_on_leaveplayer(function(player)
         if botkopain_edenai and botkopain_edenai.compact_player_history then
             botkopain_edenai.compact_player_history(name)
         end
-        
+
         -- Quand un joueur part, vérifier s'il faut changer de mode
         minetest.after(1, function()  -- Attendre 1 seconde pour la mise à jour
             local players = minetest.get_connected_players()
