@@ -42,14 +42,31 @@ local function debug_log(message)
     end
 end
 
+-- Mod storage for persistent data
+local storage = minetest.get_mod_storage()
+
 -- Structure pour stocker l'historique des conversations
 local chat_history = {
     public_sessions = {},
     private = {}
 }
 
--- Suivi des salutations par joueur avec limite temporelle (24 heures)
+-- Suivi des salutations par joueur avec limite temporelle (48 heures = 2 jours)
+local GREETING_INTERVAL = 172800  -- 48 hours in seconds
 local greeting_tracker = {}
+
+-- Load greeting tracker from storage
+local function load_greeting_tracker()
+    local data = storage:get_string("greeting_tracker")
+    if data and data ~= "" then
+        greeting_tracker = minetest.parse_json(data) or {}
+    end
+end
+
+-- Save greeting tracker to storage
+local function save_greeting_tracker()
+    storage:set_string("greeting_tracker", minetest.write_json(greeting_tracker))
+end
 
 -- Fonction pour obtenir la liste des joueurs connectés (nécessaire pour les fonctions suivantes)
 local function get_connected_players()
@@ -459,21 +476,22 @@ minetest.register_on_chat_message(function(name, message)
         local current_time = os.time()
         local player_tracker = greeting_tracker[name] or {last_greeting = 0, count = 0}
 
-        -- Vérifier si assez de temps s'est écoulé (24 heures = 86400 secondes)
+        -- Vérifier si assez de temps s'est écoulé (48 heures = 172800 secondes)
         local time_since_last = current_time - player_tracker.last_greeting
 
         -- Si le message contient aussi une question de mort/os/bones, on traite quand même le message
         local contains_death_question = message:lower():find("mort") or message:lower():find("os") or message:lower():find("bones")
 
-        if time_since_last >= 86400 or contains_death_question then  -- 24 heures en secondes OU question de mort
+        if time_since_last >= GREETING_INTERVAL or contains_death_question then  -- 48 heures en secondes OU question de mort
             -- Mettre à jour le tracker seulement si c'est vraiment une salutation pure
             if not contains_death_question then
                 greeting_tracker[name] = {
                     last_greeting = current_time,
                     count = player_tracker.count + 1
                 }
+                save_greeting_tracker()
 
-                minetest.log("action", "[BotKopain] Salutation pour " .. name .. " (dernière: " .. time_since_last .. "s ago, total: " .. greeting_tracker[name].count .. ")")
+                minetest.log("action", "[BotKopain] Salutation pour " .. name .. " (dernière: " .. math.floor(time_since_last/3600) .. "h ago, total: " .. greeting_tracker[name].count .. ")")
 
                 local greeting = generate_greeting(name, tonumber(os.date("%H")) or 12)
                 -- Attendre 3 secondes pour une réponse plus naturelle
@@ -488,7 +506,8 @@ minetest.register_on_chat_message(function(name, message)
                 -- Si c'est une salutation + question, continuer le traitement
             end
         else
-            minetest.log("action", "[BotKopain] Salutation ignorée pour " .. name .. " (trop récente: " .. time_since_last .. "s < 14400s)")
+            local hours_remaining = math.ceil((GREETING_INTERVAL - time_since_last) / 3600)
+            minetest.log("action", "[BotKopain] Salutation ignorée pour " .. name .. " (trop récente: " .. math.floor(time_since_last/3600) .. "h < " .. math.floor(GREETING_INTERVAL/3600) .. "h, prochaine dans ~" .. hours_remaining .. "h)")
         end
     end
 
@@ -827,6 +846,10 @@ for _, test_file in ipairs(test_files) do
 end
 
 minetest.log("action", "[BotKopain] Module chargé avec connexion directe EdenAI")
+
+-- Load greeting tracker from persistent storage
+load_greeting_tracker()
+minetest.log("action", "[BotKopain] Greeting tracker loaded: " .. minetest.write_json(greeting_tracker))
 
 -- Load the readbooks module
 local readbooks = dofile(minetest.get_modpath("botkopain") .. "/readbooks.lua")
