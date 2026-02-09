@@ -484,7 +484,7 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
 
     -- If player is asking about themselves, add context
     if self_reference and contains_death_keyword then
-        full_query = full_query .. "\n\n[CONTEXT] Player is asking about their own death/deaths. Use player_name='" .. player_name .. "' if no explicit username is mentioned."
+        full_query = full_query .. "\n\n[CONTEXT] Player is asking about death history and bones coordinates. Use player_name='" .. player_name .. "' if no explicit username/playername is mentioned."
     end
 
      -- Check if this is a translation request
@@ -494,7 +494,7 @@ function edenai.get_chat_response(player_name, message, online_players, tools_mo
                                  lower_message:find("es ") or lower_message:find("de ")
 
     -- Check if user is asking for detailed/explicit information
-    local detail_keywords = {"explique", "détails", "en détail", "plus d'info", "comment", "pourquoi", 
+    local detail_keywords = {"explique", "détails", "en détail", "plus d'info", "comment", "pourquoi",
                             "quel", "quelle", "détaille", "complètement", "totalement", "détaillé",
                             "explication", "informations", "décrire", "description"}
     local wants_detailed_response = false
