@@ -1093,17 +1093,6 @@ minetest.register_chatcommand("deaths_time", {
     end,
 })
 
--- Commande /time pour obtenir l'heure actuelle
-minetest.register_chatcommand("time", {
-    description = "Obtenir l'heure actuelle (fuseau horaire de Paris)",
-    privs = {botkopain = true},
-    func = function(name)
-        local current_time = tools.get_current_time()
-        minetest.chat_send_player(name, "🕐 " .. current_time)
-        return true
-    end,
-})
-
 -- Pas de salutation automatique à la connexion - le bot répond seulement aux salutations explicites
 -- avec une limite de 24 heures entre chaque salutation par joueur
 

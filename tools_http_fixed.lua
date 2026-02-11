@@ -18,29 +18,29 @@ local TOOLS = {
         type = "function",
         ["function"] = {
             name = "search_death_coordinates",
-            description = "Search for player death locations (where bones are placed) in debug.txt. When players die in the game, bones are placed at their death coordinates. This tool can find death locations for terms like: death, died, bones, os (bones), clamser (died), mort (death), décès (death), etc.",
+            description = "Rechercher les coordonnées de mort des joueurs (où les os sont placés) dans debug.txt. Quand les joueurs meurent dans le jeu, des os sont placés à leurs coordonnées de mort. Cet outil peut trouver les lieux de mort pour les termes comme : mort, morts, bones, os, clamser, décès, death, died, etc.",
             parameters = {
                 type = "object",
                 properties = {
                     username = {
                         type = "string",
-                        description = "The username of the player. If not provided, searches for all players."
+                        description = "Le nom d'utilisateur du joueur. Si non fourni, recherche pour tous les joueurs."
                     },
                     start_date = {
                         type = "string",
-                        description = "Start date in format YYYY-MM-DD or YYYY-MM-DD HH:MM for range queries (Paris timezone)"
+                        description = "Date de début au format YYYY-MM-DD ou YYYY-MM-DD HH:MM pour les requêtes de plage (fuseau horaire de Paris)"
                     },
                     end_date = {
                         type = "string",
-                        description = "End date in format YYYY-MM-DD or YYYY-MM-DD HH:MM for range queries (Paris timezone)"
+                        description = "Date de fin au format YYYY-MM-DD ou YYYY-MM-DD HH:MM pour les requêtes de plage (fuseau horaire de Paris)"
                     },
                     date = {
                         type = "string",
-                        description = "Single date in format YYYY-MM-DD (Paris timezone). Alternative to start_date/end_date."
+                        description = "Date unique au format YYYY-MM-DD (fuseau horaire de Paris). Alternative à start_date/end_date."
                     },
                     limit = {
                         type = "integer",
-                        description = "Maximum number of results to return. Default is 3. Results are sorted by most recent first.",
+                        description = "Nombre maximum de résultats à retourner. Par défaut 3. Les résultats sont triés par plus récent en premier.",
                         default = 3
                     }
                 },
@@ -52,7 +52,7 @@ local TOOLS = {
         type = "function",
         ["function"] = {
             name = "get_current_time",
-            description = "Get the current date and time in Paris timezone. Useful for interpreting relative dates like 'yesterday', 'last week', 'last 3 hours', etc.",
+            description = "Obtenir la date et l'heure actuelles dans le fuseau horaire de Paris. Utile pour interpréter les dates relatives comme 'hier', 'la semaine dernière', 'les dernières 3 heures', etc.",
             parameters = {
                 type = "object",
                 properties = {},
